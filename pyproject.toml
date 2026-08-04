@@ -1,0 +1,42 @@
+[project]
+name = "labgo"
+version = "0.1.0"
+description = "Change Impact Analyst — codebase knowledge graph + hybrid retrieval + multi-agent workflow"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.15",
+    "rich>=13.9",
+    "python-dotenv>=1.0",
+    "neo4j>=5.27",
+]
+
+[project.optional-dependencies]
+# Added at Stage 3+. Kept out of the default install so Stage 1 stays fast to set up.
+agents = [
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "anthropic>=0.40",
+]
+dev = [
+    "pytest>=8.3",
+]
+
+[project.scripts]
+labgo = "labgo.cli:app"
+
+[tool.uv.workspace]
+# Analysis corpora live outside the tree, but pin this anyway: uv auto-discovers
+# nested pyproject.toml files and will silently rebuild the venv around a cloned
+# repo if one ever lands here.
+members = []
+exclude = ["repos", "corpora"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/labgo"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
