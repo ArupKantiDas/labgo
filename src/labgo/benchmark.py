@@ -23,14 +23,14 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from labgo.ingest.gitlog import EvalCase
 
 
-class CorpusMismatch(RuntimeError):
+class CorpusMismatchError(RuntimeError):
     """The corpus is not at the commit this benchmark was built against."""
 
 
@@ -44,6 +44,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def corpus_sha(repo: Path) -> str:
+    """Current HEAD of the corpus."""
     return _git(repo, "rev-parse", "HEAD")
 
 
@@ -60,6 +61,8 @@ def files_at(repo: Path, sha: str) -> set[str]:
 
 @dataclass
 class FilterReport:
+    """What the answerability filter kept, dropped, and why."""
+
     before: int
     after: int
     dropped_dead_seed: int
@@ -67,15 +70,19 @@ class FilterReport:
 
     @property
     def dropped_pct(self) -> float:
+        """Share of raw cases removed as unanswerable."""
         return 0.0 if self.before == 0 else 100 * (self.before - self.after) / self.before
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise into the manifest, carrying the rule and its bias with the numbers."""
         return {
-            "rule": "every file (seed and all expected) must exist in the corpus tree at corpus.sha",
-            "reason": "D008 — temporal drift; cases referencing deleted/renamed files are unanswerable",
+            "rule": "every file (seed and all expected) must exist in the corpus "
+            "tree at corpus.sha",
+            "reason": "D008 — temporal drift; cases referencing deleted or renamed "
+            "files are unanswerable",
             "known_bias": (
-                "survivorship — only exercises code that survived to the pinned commit, "
-                "which is systematically different from code that was deleted or restructured"
+                "survivorship — only exercises code that survived to the pinned "
+                "commit, which differs systematically from code since deleted"
             ),
             "cases_before": self.before,
             "cases_after": self.after,
@@ -85,9 +92,7 @@ class FilterReport:
         }
 
 
-def filter_answerable(
-    cases: list[EvalCase], live: set[str]
-) -> tuple[list[EvalCase], FilterReport]:
+def filter_answerable(cases: list[EvalCase], live: set[str]) -> tuple[list[EvalCase], FilterReport]:
     """Keep only cases every one of whose files exists at the pinned commit."""
     kept: list[EvalCase] = []
     dead_seed = dead_expected = 0
@@ -109,7 +114,9 @@ def filter_answerable(
     )
 
 
-def write_benchmark(
+def write_benchmark(  # noqa: PLR0913  (each argument is a distinct provenance field;
+    #  bundling them into a config object would hide what gets recorded)
+    *,
     out_dir: Path,
     name: str,
     repo: Path,
@@ -117,6 +124,7 @@ def write_benchmark(
     report: FilterReport,
     extraction: dict[str, Any],
 ) -> Path:
+    """Write cases plus a manifest recording everything needed to reproduce the score."""
     sha = corpus_sha(repo)
     try:
         url = _git(repo, "config", "--get", "remote.origin.url")
@@ -135,7 +143,7 @@ def write_benchmark(
         "corpus": {"url": url, "sha": sha, "describe": described},
         "extraction": extraction,
         "filter": report.to_dict(),
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "note": (
             "Committed to version control on purpose. Regenerating this changes the exam; "
             "do it as a logged decision, never as a side effect of updating the corpus."
@@ -150,6 +158,7 @@ def write_benchmark(
 
 
 def load_benchmark(bench_dir: Path) -> tuple[dict[str, Any], list[EvalCase]]:
+    """Read a pinned benchmark back off disk."""
     manifest = json.loads((bench_dir / "manifest.json").read_text(encoding="utf-8"))
     raw = json.loads((bench_dir / "cases.json").read_text(encoding="utf-8"))
     cases = [EvalCase(sha=c["sha"], seed=c["seed"], expected=c["expected"]) for c in raw]
@@ -165,7 +174,7 @@ def verify_corpus(manifest: dict[str, Any], repo: Path) -> None:
     expected = manifest["corpus"]["sha"]
     actual = corpus_sha(repo)
     if actual != expected:
-        raise CorpusMismatch(
+        raise CorpusMismatchError(
             f"corpus is at {actual[:12]}, benchmark '{manifest['name']}' was built "
             f"against {expected[:12]}.\n"
             f"Scores would not be comparable. Fix with:\n"

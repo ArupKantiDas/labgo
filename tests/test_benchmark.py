@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
-from labgo.benchmark import CorpusMismatch, filter_answerable, verify_corpus
+from labgo.benchmark import CorpusMismatchError, filter_answerable, verify_corpus
 from labgo.ingest.gitlog import EvalCase
 
 
@@ -60,11 +62,9 @@ def test_empty_input_does_not_divide_by_zero() -> None:
 def test_corpus_mismatch_raises_rather_than_scoring_wrong_world(tmp_path) -> None:
     """A drifted corpus must fail loudly.
 
-    Scoring against the wrong commit returns a plausible number that means nothing,
-    and a plausible wrong answer is far more dangerous than an error.
+    Scoring against the wrong commit returns a plausible number that means
+    nothing, and a plausible wrong answer is worse than an error.
     """
-    import subprocess
-
     repo = tmp_path / "corpus"
     repo.mkdir()
     for args in (
@@ -74,12 +74,13 @@ def test_corpus_mismatch_raises_rather_than_scoring_wrong_world(tmp_path) -> Non
     ):
         subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
     (repo / "f.py").write_text("x = 1\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "one"], check=True, capture_output=True)
+    for args in (["add", "-A"], ["commit", "-qm", "one"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
     manifest = {"name": "t", "corpus": {"sha": "0" * 40}}
-    with pytest.raises(CorpusMismatch) as exc:
+    with pytest.raises(CorpusMismatchError) as exc:
         verify_corpus(manifest, repo)
 
     # The error has to be actionable, not just true.
-    assert "git -C" in str(exc.value) and "checkout" in str(exc.value)
+    assert "git -C" in str(exc.value)
+    assert "checkout" in str(exc.value)

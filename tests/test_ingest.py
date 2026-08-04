@@ -22,11 +22,18 @@ def _write(root: Path, rel: str, src: str) -> None:
 
 
 def test_resolves_local_import_and_self_calls(tmp_path: Path) -> None:
-    _write(tmp_path, "pkg/util.py", """
+    _write(
+        tmp_path,
+        "pkg/util.py",
+        """
         def helper():
             return 1
-    """)
-    _write(tmp_path, "pkg/core.py", """
+    """,
+    )
+    _write(
+        tmp_path,
+        "pkg/core.py",
+        """
         from pkg.util import helper
 
         class Engine:
@@ -35,7 +42,8 @@ def test_resolves_local_import_and_self_calls(tmp_path: Path) -> None:
 
             def step(self):
                 return 2
-    """)
+    """,
+    )
 
     g = extract_repo(tmp_path)
     calls = {(e.src, e.dst) for e in g.edges if e.kind is EdgeKind.CALLS}
@@ -50,26 +58,34 @@ def test_resolves_local_import_and_self_calls(tmp_path: Path) -> None:
 
 def test_builtins_excluded_from_denominator(tmp_path: Path) -> None:
     """D005: counting len()/isinstance() as unresolved understated resolution."""
-    _write(tmp_path, "m.py", """
+    _write(
+        tmp_path,
+        "m.py",
+        """
         def f(xs):
             return len(xs) + int(isinstance(xs, list))
-    """)
+    """,
+    )
 
     g = extract_repo(tmp_path)
     assert g.stats.external_calls == 3, "len/int/isinstance should be external"
     assert g.stats.in_scope_calls == 0
-    assert g.stats.resolution_rate == 0.0    # 0/0 must not divide by zero
+    assert g.stats.resolution_rate == 0.0  # 0/0 must not divide by zero
 
 
 def test_shadowed_builtin_is_not_external(tmp_path: Path) -> None:
     """A repo-defined `list()` is internal, however much it looks like a builtin."""
-    _write(tmp_path, "m.py", """
+    _write(
+        tmp_path,
+        "m.py",
+        """
         def list():
             return []
 
         def g():
             return list()
-    """)
+    """,
+    )
 
     g = extract_repo(tmp_path)
     assert g.stats.external_calls == 0
@@ -80,12 +96,16 @@ def test_shadowed_builtin_is_not_external(tmp_path: Path) -> None:
 
 def test_test_functions_emit_tests_edges(tmp_path: Path) -> None:
     _write(tmp_path, "app.py", "def target():\n    return 1\n")
-    _write(tmp_path, "tests/test_app.py", """
+    _write(
+        tmp_path,
+        "tests/test_app.py",
+        """
         from app import target
 
         def test_target():
             assert target() == 1
-    """)
+    """,
+    )
 
     g = extract_repo(tmp_path)
     assert any(e.kind is EdgeKind.TESTS for e in g.edges)
@@ -103,7 +123,7 @@ def test_syntax_errors_are_counted_not_fatal(tmp_path: Path) -> None:
 
 
 def test_git_log_parser_handles_the_real_format() -> None:
-    """D006: \\x1e as a record marker was silently eaten by splitlines()."""
+    r"""D006: \x1e as a record marker was silently eaten by splitlines()."""
     raw = "@@C@@abc123\x1f1700000000\x1fAda\na.py\nb.py\n@@C@@def456\x1f1700000001\x1fGrace\nc.py\n"
     commits = list(parse_commits(raw))
 

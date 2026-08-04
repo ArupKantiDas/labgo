@@ -19,6 +19,7 @@ agents = [
 ]
 dev = [
     "pytest>=8.3",
+    "ruff>=0.9",
 ]
 
 [project.scripts]
@@ -40,3 +41,52 @@ packages = ["src/labgo"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Strict by default: enable everything, then subtract with a stated reason.
+# An unexplained ignore is how a lint config rots into decoration.
+select = ["ALL"]
+ignore = [
+    "COM812",  # trailing-comma — conflicts with the formatter
+    "ISC001",  # implicit-str-concat — conflicts with the formatter
+    "D203",    # incompatible with D211; ruff requires choosing one
+    "D213",    # incompatible with D212; ruff requires choosing one
+    "CPY001",  # missing-copyright-notice — single-author project, no headers wanted
+    "S603",    # subprocess-without-shell-equals-true — argv is built as a list by hand,
+               # shell=True is never used, and no untrusted input is interpolated
+    "S607",    # start-process-with-partial-path — resolving `git` from PATH is intended
+    "TC003",   # typing-only-stdlib-import — `from __future__ import annotations` already
+               # makes annotations lazy; the extra TYPE_CHECKING block costs readability
+               # and buys nothing here
+    "TRY003",  # raise-vanilla-args  ─┐ Error messages are deliberately long and
+    "EM101",   # raw-string-in-except │ actionable — CorpusMismatchError prints the exact
+    "EM102",   # f-string-in-except  ─┘ `git checkout` needed to fix the problem. Pushing
+               #                        that into an exception class would hide it.
+    "TD002",   # missing-todo-author — single-author project
+    "TD003",   # missing-todo-link — decisions are tracked in DECISIONS.md, not an issue tracker
+    "FIX002",  # line-contains-todo — TODOs are allowed, and recorded in DECISIONS.md
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/labgo/cli.py" = [
+    "B008",     # function-call-in-default-argument — `x: T = typer.Option(...)` IS the
+                # Typer API. Following this rule would mean not using the library.
+    "PLR0913",  # too-many-arguments  ─┐ A CLI command's arguments are its flags; the
+    "PLR0917",  # too-many-positional ─┘ count is set by the interface, not by design.
+]
+"tests/*" = [
+    "S101",     # assert is the point of a test
+    "PLR2004",  # magic values in assertions are clearer than named constants
+    "ANN001",   # fixture params (tmp_path) are typed by pytest
+    "ANN201",   # test functions return None; annotating every one is noise
+    "D100",     # module docstring optional for test modules
+    "D103",     # a well-named test function is its own docstring
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

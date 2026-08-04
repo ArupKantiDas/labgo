@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from labgo.benchmark import (
-    CorpusMismatch,
+    CorpusMismatchError,
     corpus_sha,
     files_at,
     filter_answerable,
@@ -155,7 +155,11 @@ def benchmark(
         raise typer.Exit(1)
 
     bench = write_benchmark(
-        out_dir=out, name=name, repo=repo, cases=kept, report=report,
+        out_dir=out,
+        name=name,
+        repo=repo,
+        cases=kept,
+        report=report,
         extraction={
             "max_commits": max_commits,
             "evidence_max_files": evidence_max_files,
@@ -163,10 +167,12 @@ def benchmark(
             "min_files": 2,
         },
     )
-    console.print(f"\n  [dim]wrote[/dim] {bench}/manifest.json\n  [dim]wrote[/dim] {bench}/cases.json")
     console.print(
-        "\n[dim]Commit this directory. Regenerating it changes the exam — do that as a "
-        "logged decision, not as a side effect of updating the corpus.[/dim]"
+        f"\n  [dim]wrote[/dim] {bench}/manifest.json\n  [dim]wrote[/dim] {bench}/cases.json"
+    )
+    console.print(
+        "\n[dim]Commit this directory. Regenerating it changes the exam — do that "
+        "as a logged decision, not as a side effect of updating the corpus.[/dim]"
     )
 
 
@@ -179,9 +185,9 @@ def verify(
     manifest, cases = load_benchmark(bench_dir)
     try:
         verify_corpus(manifest, repo)
-    except CorpusMismatch as exc:
+    except CorpusMismatchError as exc:
         console.print(f"[bold red]corpus mismatch[/bold red]\n{exc}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
     console.print(
         f"[bold green]ok[/bold green]  '{manifest['name']}' · "
         f"{len(cases):,} cases · corpus at {manifest['corpus']['sha'][:12]}"

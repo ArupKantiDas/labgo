@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import subprocess
 from collections import Counter
-from dataclasses import dataclass, field, asdict
+from collections.abc import Iterator
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 # Two separate traps, both hit while building this:
 #
@@ -42,13 +43,20 @@ _FMT = "@@C@@%H%x1f%at%x1f%an"
 SOURCE_SUFFIXES = {".py"}
 
 NOISE_NAMES = {
-    "uv.lock", "poetry.lock", "package-lock.json", "yarn.lock", "Pipfile.lock",
-    "requirements.txt", "CHANGELOG.md",
+    "uv.lock",
+    "poetry.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "Pipfile.lock",
+    "requirements.txt",
+    "CHANGELOG.md",
 }
 
 
 @dataclass
 class Commit:
+    """One non-merge commit and the files it touched."""
+
     sha: str
     ts: int
     author: str
@@ -80,26 +88,32 @@ class EvalCase:
     expected: list[str]
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the benchmark cases file."""
         return asdict(self)
 
 
 @dataclass
 class HistoryStats:
+    """Why commits were kept or dropped — the audit trail for the filters above."""
+
     commits_scanned: int = 0
     merges_skipped: int = 0
-    too_large_skipped: int = 0      # over evidence_max_files -> no pairs, no case
-    too_large_for_eval: int = 0     # over eval_max_files -> pairs kept, no case
+    too_large_skipped: int = 0  # over evidence_max_files -> no pairs, no case
+    too_large_for_eval: int = 0  # over eval_max_files -> pairs kept, no case
     no_source_skipped: int = 0
-    commits_used: int = 0           # contributed co-change evidence
+    commits_used: int = 0  # contributed co-change evidence
     eval_cases: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the benchmark manifest."""
         return asdict(self)
 
 
 @dataclass
 class History:
-    pairs: Counter = field(default_factory=Counter)   # (a, b) sorted -> count
+    """Mined co-change evidence plus the eval cases derived from the same commits."""
+
+    pairs: Counter = field(default_factory=Counter)  # (a, b) sorted -> count
     cases: list[EvalCase] = field(default_factory=list)
     stats: HistoryStats = field(default_factory=HistoryStats)
 
@@ -112,7 +126,10 @@ def _is_source(path: str) -> bool:
 def _run_git_log(repo: Path, max_commits: int) -> str:
     # --no-merges is belt-and-braces with the parent-count check below.
     cmd = [
-        "git", "-C", str(repo), "log",
+        "git",
+        "-C",
+        str(repo),
+        "log",
         "--no-merges",
         f"--max-count={max_commits}",
         f"--format={_FMT}",
@@ -125,14 +142,19 @@ def _run_git_log(repo: Path, max_commits: int) -> str:
 
 
 def parse_commits(raw: str) -> Iterator[Commit]:
+    """Parse `git log --name-only` output into commits.
+
+    Separated from `_run_git_log` so it can be tested without a repository — which
+    matters, because this parser once returned zero commits silently (D006).
+    """
     sha = ts = author = None
     files: list[str] = []
     for line in raw.splitlines():
         if line.startswith(_REC):
             if sha is not None:
                 yield Commit(sha, int(ts or 0), author or "", files)
-            parts = line[len(_REC):].split(_SEP)
-            sha, ts, author = (parts + ["", "", ""])[:3]
+            parts = line[len(_REC) :].split(_SEP)
+            sha, ts, author = [*parts, "", "", ""][:3]
             files = []
         elif line.strip():
             files.append(line.strip())
@@ -182,7 +204,7 @@ def extract_history(
         st.commits_used += 1
 
         for i, a in enumerate(files):
-            for b in files[i + 1:]:
+            for b in files[i + 1 :]:
                 hist.pairs[(a, b)] += 1
 
         # Exam questions are held to the stricter cap.
@@ -206,7 +228,5 @@ def co_change_edges(hist: History, min_count: int = 2) -> list[dict[str, Any]]:
     that requires a repeated observation.
     """
     return [
-        {"src": a, "dst": b, "count": n}
-        for (a, b), n in hist.pairs.most_common()
-        if n >= min_count
+        {"src": a, "dst": b, "count": n} for (a, b), n in hist.pairs.most_common() if n >= min_count
     ]

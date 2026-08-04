@@ -19,13 +19,13 @@ import ast
 import builtins
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from labgo.ingest.models import (
     Confidence,
     Edge,
     EdgeKind,
-    ExtractionStats,
     Graph,
     Node,
     NodeKind,
@@ -33,8 +33,20 @@ from labgo.ingest.models import (
 
 # Directories that are never interesting and dominate parse time if included.
 SKIP_DIRS = {
-    ".git", ".venv", "venv", "env", "__pycache__", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", "node_modules", "build", "dist", ".tox", ".eggs", "site-packages",
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "node_modules",
+    "build",
+    "dist",
+    ".tox",
+    ".eggs",
+    "site-packages",
 }
 
 
@@ -45,7 +57,7 @@ STDLIB_MODULES = frozenset(sys.stdlib_module_names)
 def _is_external(
     name: str,
     base: str | None,
-    v: "_FileVisitor",
+    v: _FileVisitor,
     module_to_file: dict[str, str],
     by_name: dict[str, list[str]],
 ) -> bool:
@@ -81,14 +93,11 @@ def _is_external(
 
 def _is_test_path(rel: str) -> bool:
     name = Path(rel).name
-    return (
-        name.startswith("test_")
-        or name.endswith("_test.py")
-        or "tests" in Path(rel).parts
-    )
+    return name.startswith("test_") or name.endswith("_test.py") or "tests" in Path(rel).parts
 
 
 def iter_python_files(root: Path) -> list[Path]:
+    """Every Python file under `root`, minus vendored and cache directories."""
     out: list[Path] = []
     for p in root.rglob("*.py"):
         if any(part in SKIP_DIRS for part in p.relative_to(root).parts):
@@ -113,15 +122,15 @@ class _FileVisitor(ast.NodeVisitor):
         self.rel_path = rel_path
         self.nodes: list[Node] = []
         self.edges: list[Edge] = []
-        # (caller_id, called_name, attr_base, enclosing_class_qualname)
+        # Shape: (caller_id, called_name, attr_base, enclosing_class_qualname)  # noqa: ERA001
         # Resolved later, once every file's definitions are known.
         self.calls: list[tuple[str, str, str | None, str | None]] = []
         # `from x import y as z` -> {z: (x, y)};  `import x as z` -> {z: (x, None)}
         self.imports: dict[str, tuple[str, str | None]] = {}
         self.import_modules: set[str] = set()
-        self._scope: list[str] = []          # qualname stack (class/function names)
-        self._func_stack: list[str] = []     # ids of enclosing *functions* only
-        self._class_stack: list[str] = []    # qualnames of enclosing classes
+        self._scope: list[str] = []  # qualname stack (class/function names)
+        self._func_stack: list[str] = []  # ids of enclosing *functions* only
+        self._class_stack: list[str] = []  # qualnames of enclosing classes
 
     # --- definitions -----------------------------------------------------
 
@@ -175,8 +184,9 @@ class _FileVisitor(ast.NodeVisitor):
         self._func_stack.pop()
         self._scope.pop()
 
-    visit_FunctionDef = _visit_function
-    visit_AsyncFunctionDef = _visit_function
+    # ast.NodeVisitor dispatches on `visit_<NodeType>`; the casing is the protocol.
+    visit_FunctionDef = _visit_function  # noqa: N815
+    visit_AsyncFunctionDef = _visit_function  # noqa: N815
 
     # --- imports ---------------------------------------------------------
 
@@ -188,7 +198,7 @@ class _FileVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if node.module is None:      # `from . import x` — relative, skip for v1
+        if node.module is None:  # `from . import x` — relative, skip for v1
             self.generic_visit(node)
             return
         for alias in node.names:
@@ -201,7 +211,7 @@ class _FileVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         if not self._func_stack:
-            self.generic_visit(node)      # module-level call; no caller to attribute to
+            self.generic_visit(node)  # module-level call; no caller to attribute to
             return
         caller = self._func_stack[-1]
         cls = self._class_stack[-1] if self._class_stack else None
@@ -212,6 +222,113 @@ class _FileVisitor(ast.NodeVisitor):
             base = func.value.id if isinstance(func.value, ast.Name) else None
             self.calls.append((caller, func.attr, base, cls))
         self.generic_visit(node)
+
+
+@dataclass
+class _Index:
+    """Lookup tables built after parsing, used only by call resolution."""
+
+    defs_by_id: dict[str, Node]
+    by_name: dict[str, list[str]]  # bare name -> ids; ambiguous names stay heuristic
+    local_index: dict[tuple[str, str], str]  # (file, name) -> id
+    module_to_file: dict[str, str]
+
+
+def _resolve_one(
+    rel: str,
+    call: tuple[str, str, str | None, str | None],
+    v: _FileVisitor,
+    idx: _Index,
+) -> tuple[str | None, Confidence | None]:
+    """Resolve one call site to a target id, in descending order of certainty.
+
+    Split out of `extract_repo` because the resolution ladder is the part most likely
+    to change: it is where a type-inferring backend would plug in if the eval set ever
+    shows call-graph recall is the binding constraint (D004).
+
+    Returns `(None, None)` when unresolved. External calls are handled by the caller,
+    since they must not land in the denominator.
+    """
+    _caller, name, base, cls_qual = call
+
+    # (a) self.foo() / cls.foo() inside a class -> that class's method
+    if base in ("self", "cls") and cls_qual:
+        cand = idx.defs_by_id.get(f"{rel}::{cls_qual}.{name}")
+        if cand:
+            return cand.id, Confidence.SELF
+
+    # (b) explicit import: `from mod import name`
+    if name in v.imports:
+        mod, orig = v.imports[name]
+        tgt_file = idx.module_to_file.get(mod)
+        if tgt_file and orig:
+            cand_id = idx.local_index.get((tgt_file, orig))
+            if cand_id:
+                return cand_id, Confidence.EXACT
+
+    # (c) defined in the same file
+    cand_id = idx.local_index.get((rel, name))
+    if cand_id:
+        return cand_id, Confidence.LOCAL
+
+    # (d) unique name anywhere in the repo
+    cands = idx.by_name.get(name, [])
+    if len(cands) == 1:
+        return cands[0], Confidence.HEURISTIC
+
+    return None, None
+
+
+_CONF_COUNTER = {
+    Confidence.EXACT: "resolved_exact",
+    Confidence.SELF: "resolved_self",
+    Confidence.LOCAL: "resolved_local",
+    Confidence.HEURISTIC: "resolved_heuristic",
+}
+
+
+def _resolve_calls(graph: Graph, visitors: dict[str, _FileVisitor], idx: _Index) -> None:
+    """Walk every recorded call site, emit CALLS/TESTS edges, and tally the metrics."""
+    stats = graph.stats
+    seen: set[tuple[str, str]] = set()
+
+    for rel, v in visitors.items():
+        for call in v.calls:
+            caller = call[0]
+            stats.total_calls += 1
+
+            # External calls were never repo-internal. Counting them as "unresolved"
+            # makes the resolution rate meaningless (D005), so they leave the denominator.
+            if _is_external(call[1], call[2], v, idx.module_to_file, idx.by_name):
+                stats.external_calls += 1
+                continue
+
+            target, conf = _resolve_one(rel, call, v, idx)
+            if target is None or conf is None:
+                stats.unresolved_calls += 1
+                continue
+
+            setattr(stats, _CONF_COUNTER[conf], getattr(stats, _CONF_COUNTER[conf]) + 1)
+
+            if caller == target or (caller, target) in seen:
+                continue
+            seen.add((caller, target))
+
+            graph.edges.append(
+                Edge(src=caller, dst=target, kind=EdgeKind.CALLS, props={"confidence": conf.value})
+            )
+
+            # A test function calling a function is evidence of coverage.
+            caller_node = idx.defs_by_id.get(caller)
+            if caller_node and caller_node.props.get("is_test"):
+                graph.edges.append(
+                    Edge(
+                        src=caller,
+                        dst=target,
+                        kind=EdgeKind.TESTS,
+                        props={"confidence": conf.value},
+                    )
+                )
 
 
 def extract_repo(root: Path) -> Graph:
@@ -259,12 +376,16 @@ def extract_repo(root: Path) -> Graph:
 
     # Indexes for resolution.
     defs_by_id = {n.id: n for n in graph.nodes if n.kind is NodeKind.FUNCTION}
-    # bare name -> [ids].  Ambiguous names (len > 1) only ever resolve heuristically.
     by_name: dict[str, list[str]] = defaultdict(list)
     for n in defs_by_id.values():
         by_name[n.name].append(n.id)
-    # (file, name) -> id, for same-file resolution
-    local_index = {(n.path, n.name): n.id for n in defs_by_id.values()}
+
+    idx = _Index(
+        defs_by_id=defs_by_id,
+        by_name=by_name,
+        local_index={(n.path, n.name): n.id for n in defs_by_id.values()},
+        module_to_file=module_to_file,
+    )
 
     # --- pass 2: IMPORTS edges ---
     for rel, v in visitors.items():
@@ -274,75 +395,6 @@ def extract_repo(root: Path) -> Graph:
                 graph.edges.append(Edge(src=rel, dst=target, kind=EdgeKind.IMPORTS))
 
     # --- pass 3: resolve CALLS ---
-    seen: set[tuple[str, str]] = set()
-    for rel, v in visitors.items():
-        for caller, name, base, cls_qual in v.calls:
-            stats.total_calls += 1
-            target: str | None = None
-            conf: Confidence | None = None
-
-            # (0) External: builtins, stdlib, and third-party calls were never
-            # repo-internal. Counting them as "unresolved" makes the resolution rate
-            # meaningless, so classify and exclude them from the denominator.
-            if _is_external(name, base, v, module_to_file, by_name):
-                stats.external_calls += 1
-                continue
-
-            # (a) self.foo() / cls.foo() inside a class -> that class's method
-            if base in ("self", "cls") and cls_qual:
-                cand = defs_by_id.get(f"{rel}::{cls_qual}.{name}")
-                if cand:
-                    target, conf = cand.id, Confidence.SELF
-
-            # (b) explicit import: `from mod import name`
-            if target is None and name in v.imports:
-                mod, orig = v.imports[name]
-                tgt_file = module_to_file.get(mod)
-                if tgt_file and orig:
-                    cand = local_index.get((tgt_file, orig))
-                    if cand:
-                        target, conf = cand, Confidence.EXACT
-
-            # (c) defined in the same file
-            if target is None:
-                cand = local_index.get((rel, name))
-                if cand:
-                    target, conf = cand, Confidence.LOCAL
-
-            # (d) unique name anywhere in the repo
-            if target is None:
-                cands = by_name.get(name, [])
-                if len(cands) == 1:
-                    target, conf = cands[0], Confidence.HEURISTIC
-
-            if target is None or conf is None:
-                stats.unresolved_calls += 1
-                continue
-
-            if conf is Confidence.EXACT:
-                stats.resolved_exact += 1
-            elif conf is Confidence.SELF:
-                stats.resolved_self += 1
-            elif conf is Confidence.LOCAL:
-                stats.resolved_local += 1
-            else:
-                stats.resolved_heuristic += 1
-
-            if caller == target or (caller, target) in seen:
-                continue
-            seen.add((caller, target))
-
-            graph.edges.append(
-                Edge(src=caller, dst=target, kind=EdgeKind.CALLS,
-                     props={"confidence": conf.value})
-            )
-
-            # A test function calling a function is evidence of coverage.
-            caller_node = defs_by_id.get(caller)
-            if caller_node and caller_node.props.get("is_test"):
-                graph.edges.append(
-                    Edge(src=caller, dst=target, kind=EdgeKind.TESTS,
-                         props={"confidence": conf.value})
-                )
+    _resolve_calls(graph, visitors, idx)
 
     return graph
