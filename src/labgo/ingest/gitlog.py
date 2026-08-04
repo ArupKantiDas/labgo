@@ -5,9 +5,10 @@ decisions here matter more than the code:
 
 * **Merge commits are excluded.** A merge's file list is the union of unrelated
   branches; treating it as evidence of coupling manufactures edges that don't exist.
-* **Large commits are excluded** (`max_files`). A 300-file lint sweep or dependency
-  bump says nothing about semantic coupling, but it would contribute ~45,000 spurious
-  pairs — enough to dominate the signal from every real commit combined.
+* **Large commits are excluded**, under two separate caps (D010). Pairs grow as N²,
+  so on httpx five commits out of 620 contributed 30% of all co-change evidence. A
+  300-file lint sweep says nothing about semantic coupling but would swamp every real
+  commit combined.
 * **Only source files count.** Lockfiles and generated output co-change with
   everything and would inflate apparent recall.
 
@@ -58,9 +59,20 @@ class Commit:
 class EvalCase:
     """One prediction task derived from a real commit.
 
-    Given `seed` (the first file the developer touched), a system should predict
-    `expected` (everything else that changed in the same commit). Recall against
-    this set is the retrieval metric; it needs no human labelling.
+    Given `seed` — *one* file from the commit — a system should predict `expected`,
+    the other files that changed alongside it. Recall against this is the retrieval
+    metric, and it needs no human labelling.
+
+    Two things `seed` is **not**, both worth stating so nobody infers them:
+
+    * Not "the file the developer touched first". Git records no edit order; that
+      information does not exist in history. It is the alphabetically-first source
+      file, chosen purely so the set is deterministic.
+    * Not a clean causal label. `expected` is *what changed together*, not *what had
+      to change*, so it includes bundled unrelated edits and mechanical sweeps. The
+      key therefore contains false positives and no system can score near 100% (D009).
+      This is why relative comparison against a baseline is the meaningful measure and
+      absolute accuracy claims are not.
     """
 
     sha: str
@@ -75,9 +87,10 @@ class EvalCase:
 class HistoryStats:
     commits_scanned: int = 0
     merges_skipped: int = 0
-    too_large_skipped: int = 0
+    too_large_skipped: int = 0      # over evidence_max_files -> no pairs, no case
+    too_large_for_eval: int = 0     # over eval_max_files -> pairs kept, no case
     no_source_skipped: int = 0
-    commits_used: int = 0
+    commits_used: int = 0           # contributed co-change evidence
     eval_cases: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -130,13 +143,23 @@ def parse_commits(raw: str) -> Iterator[Commit]:
 def extract_history(
     repo: Path,
     max_commits: int = 2000,
-    max_files: int = 20,
+    evidence_max_files: int = 20,
+    eval_max_files: int = 10,
     min_files: int = 2,
 ) -> History:
     """Mine co-change signal and build the eval set.
 
-    `max_files=20` is a starting point, not a truth. Sweep it and watch what happens
-    to baseline recall — that sweep is a genuinely interesting finding to report.
+    **Two separate size caps, deliberately (D010).** They were one parameter until the
+    coupling turned out to be a mild form of leakage: tuning the threshold to improve the
+    evidence silently changed the exam it was being scored against.
+
+    * `evidence_max_files` (looser) — commits above this contribute no co-change pairs.
+      Evidence tolerates noise because `min_count>=2` filters it downstream.
+    * `eval_max_files` (tighter) — commits above this produce no eval case. Exam labels
+      cannot be de-noised after the fact, so they need focused commits.
+
+    Neither default is derived. Sweep them against baseline recall and pick from the
+    curve; the measured distribution that motivated the split is in D010.
     """
     hist = History()
     st = hist.stats
@@ -148,12 +171,12 @@ def extract_history(
         if not files:
             st.no_source_skipped += 1
             continue
-        if len(files) > max_files:
-            st.too_large_skipped += 1
-            continue
         if len(files) < min_files:
             # Single-file commits carry no coupling signal and no prediction task,
             # but they are not "skipped" in a suspicious sense — just unusable here.
+            continue
+        if len(files) > evidence_max_files:
+            st.too_large_skipped += 1
             continue
 
         st.commits_used += 1
@@ -161,6 +184,11 @@ def extract_history(
         for i, a in enumerate(files):
             for b in files[i + 1:]:
                 hist.pairs[(a, b)] += 1
+
+        # Exam questions are held to the stricter cap.
+        if len(files) > eval_max_files:
+            st.too_large_for_eval += 1
+            continue
 
         # The seed is the alphabetically-first file purely for determinism. Git does
         # not record edit order, so "the file the developer touched first" is not

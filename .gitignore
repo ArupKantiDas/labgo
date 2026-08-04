@@ -1,7 +1,12 @@
 __pycache__/
 *.pyc
 .venv/
-data/
 .env
 .pytest_cache/
 repos/
+
+# Generated artifacts — regenerable from corpus + code.
+data/
+
+# benchmarks/ is deliberately NOT ignored (D008): pinned exams must be
+# version-controlled or scores are not comparable across time.

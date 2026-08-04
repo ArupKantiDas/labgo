@@ -123,6 +123,128 @@ as a guard.
 
 ---
 
+## D008 — 45% of the eval set was unanswerable (temporal drift)
+**Date:** 2026-08-04 · **Status:** open — must fix before any score is quoted
+
+Found by asking a simple question: does the eval set mean anything without the corpus?
+
+Eval questions are mined from commits across all of history, but the code graph is built
+from the corpus at **HEAD**. Files referenced by old commits have since been deleted or
+renamed, so the system cannot name them — not "gets them wrong", *cannot produce them*.
+
+**Measured on httpx:**
+
+| | |
+|---|---|
+| cases whose seed no longer exists | **278 / 610** |
+| cases with ≥1 expected file gone | 305 / 610 |
+| cases where nothing survives | 101 / 610 |
+
+Example: `httpx/_compat.py` is a seed in the eval set and was deleted years ago.
+
+**Consequence:** any score computed today is silently depressed by ~45% unanswerable
+questions, and would be misread as the system underperforming.
+
+**Options:**
+1. *Filter* to cases where every file survives at the pinned commit. Cheap. Introduces
+   survivorship bias — only tests code that lasted, which is systematically different.
+2. *Restrict the window* to recent history where file identity is stable. Fewer cases.
+3. *Time-travel*: for each case, build the graph from the commit's parent. Methodologically
+   correct, simulates the developer's actual moment, but rebuilds the graph N times.
+
+**Chosen:** (1) now, with the bias documented; (3) recorded as the rigorous version to
+build if a result ever hinges on it.
+
+**Resolved.** `labgo benchmark` builds a pinned benchmark under `benchmarks/<name>/`:
+filtered cases plus a manifest recording corpus URL and SHA, extraction parameters, the
+filter rule, and the survivorship bias it introduces. `labgo verify` refuses to score
+against a drifted corpus.
+
+**Outcome on httpx** (corpus `b5addb64`, `eval_max_files=10`):
+
+| | |
+|---|---|
+| raw cases | 565 |
+| dropped — seed deleted | 259 |
+| dropped — an expected file deleted | 70 |
+| **answerable** | **236 (−58.2%)** |
+
+Losing 58% of the exam is the right trade. 236 questions that can be answered beat 565
+where two in five are impossible, because the second set produces a number that looks
+like underperformance and is actually arithmetic.
+
+**Corollary — what "pinning" has to mean.** Four things must be fixed together or scores
+are not comparable across time: the corpus commit SHA, the eval set, the extraction
+parameters, and temporal consistency between the first two. Committing the eval set alone
+(the original plan) was half a fix.
+
+---
+
+## D009 — Co-change labels are noisy, and the ceiling is not 100%
+**Date:** 2026-08-04 · **Status:** accepted, with mitigation
+
+A commit's file list is *"files that changed together"*, not *"files that had to change
+together"*. It also contains bundled unrelated work ("while I was in there"), mechanical
+sweeps (rename across six files), and multiple logical changes squashed into one commit.
+
+So `expected` contains false positives. The answer key has wrong answers in it.
+
+**What follows:**
+- **A ceiling exists.** With meaningful label noise, no system scores near 100%. Chasing a
+  high absolute number means overfitting to noise.
+- **Relative comparison survives.** Baseline 45% vs agents 60% is a real 15-point gap —
+  both were scored against the same noisy key, so the noise cancels. *This is the core
+  argument for building the deterministic baseline first.*
+- **Absolute claims do not survive.** Never "60% accurate at impact analysis". Only "60%
+  on this benchmark, which has known label noise."
+- **The noise is biased, not random.** Certain authors, eras, and areas bundle more, so it
+  cannot be modelled as uniform error.
+
+**Mitigation (cheap, do it):** score on the full set *and* on a high-confidence subset
+where the co-change is corroborated independently — an actual call-graph edge between the
+files, or a pairing recurring across many commits. Similar scores ⇒ noise isn't binding.
+Much higher on the clean subset ⇒ a chunk of apparent failures are the benchmark's fault.
+
+**Not a flaw unique to this project.** It is the standing trade in mining version history:
+thousands of noisy labels, or dozens of clean hand-written ones. The failure mode is not
+knowing which you have.
+
+---
+
+## D010 — `max_files` was a guess; the data says it is too generous
+**Date:** 2026-08-04 · **Status:** open — sweep required
+
+Commit size punishes geometrically: N files produce N(N−1)/2 pairs. 5 files → 10 pairs,
+20 → 190, 47 → 1,081. Without a cap, the largest and least meaningful commits dominate.
+
+**Measured on httpx (620 commits touching ≥2 source files, 14,125 pairs total):**
+
+| files/commit | commits | pairs | % of all pairs |
+|---|---|---|---|
+| 2–3 | 328 | 546 | 3.9% |
+| 4–5 | 131 | 982 | 7.0% |
+| 6–10 | 106 | 2,737 | 19.4% |
+| 11–20 | 45 | 4,377 | 31.0% |
+| 21–50 | 10 | 5,483 | 38.8% |
+
+**The five largest commits alone contribute 30% of all co-change evidence.**
+
+Reading the curve, `max_files=20` is likely too loose — a 15-file change in a 60-file
+library is a refactor, not a coupled change. 8–10 looks more defensible.
+
+**Not asserting a value.** Two effects oppose: a larger cap gives more coverage, a smaller
+one gives cleaner signal. The crossover is empirical. Sweep the parameter against baseline
+recall and pick from the curve; keep the plot.
+
+**Design flaw exposed by the same question:** `max_files` currently governs *both* which
+commits contribute co-change evidence *and* which become exam questions. These want
+different values — the exam wants focused commits for clean labels; the evidence tolerates
+more noise because `min_count=2` filters downstream. Coupling them also means tuning the
+threshold silently tunes the exam to match the evidence, which is a mild form of leakage.
+**Split into two parameters.**
+
+---
+
 ## Template
 
 ```

@@ -1,0 +1,26 @@
+{
+  "name": "httpx",
+  "corpus": {
+    "url": "https://github.com/encode/httpx.git",
+    "sha": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
+    "describe": "0.28.1-24-gb5addb64"
+  },
+  "extraction": {
+    "max_commits": 2000,
+    "evidence_max_files": 20,
+    "eval_max_files": 10,
+    "min_files": 2
+  },
+  "filter": {
+    "rule": "every file (seed and all expected) must exist in the corpus tree at corpus.sha",
+    "reason": "D008 \u2014 temporal drift; cases referencing deleted/renamed files are unanswerable",
+    "known_bias": "survivorship \u2014 only exercises code that survived to the pinned commit, which is systematically different from code that was deleted or restructured",
+    "cases_before": 565,
+    "cases_after": 236,
+    "dropped_because_seed_gone": 259,
+    "dropped_because_expected_gone": 70,
+    "dropped_pct": 58.2
+  },
+  "created_at": "2026-08-04T16:25:07+00:00",
+  "note": "Committed to version control on purpose. Regenerating this changes the exam; do it as a logged decision, never as a side effect of updating the corpus."
+}

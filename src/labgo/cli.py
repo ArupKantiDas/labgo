@@ -9,6 +9,15 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from labgo.benchmark import (
+    CorpusMismatch,
+    corpus_sha,
+    files_at,
+    filter_answerable,
+    load_benchmark,
+    verify_corpus,
+    write_benchmark,
+)
 from labgo.ingest.gitlog import co_change_edges, extract_history
 from labgo.ingest.models import EdgeKind, NodeKind
 from labgo.ingest.pyast import extract_repo
@@ -70,18 +79,29 @@ def history(
     repo: Path = typer.Argument(..., help="Path to a git repo"),
     out: Path = typer.Option(Path("data"), "--out", "-o"),
     max_commits: int = typer.Option(2000, "--max-commits"),
-    max_files: int = typer.Option(20, "--max-files", help="Drop commits touching more than this"),
+    evidence_max_files: int = typer.Option(
+        20, "--evidence-max-files", help="Commits above this contribute no co-change pairs"
+    ),
+    eval_max_files: int = typer.Option(
+        10, "--eval-max-files", help="Commits above this produce no eval case (D010)"
+    ),
 ) -> None:
     """Mine co-change edges and build the ground-truth eval set from git history."""
-    hist = extract_history(repo, max_commits=max_commits, max_files=max_files)
+    hist = extract_history(
+        repo,
+        max_commits=max_commits,
+        evidence_max_files=evidence_max_files,
+        eval_max_files=eval_max_files,
+    )
     st = hist.stats
 
     t = Table(title="Git history", show_header=False, title_style="bold")
     t.add_row("commits scanned", f"{st.commits_scanned:,}")
-    t.add_row("  skipped: too large", f"{st.too_large_skipped:,}")
     t.add_row("  skipped: no source files", f"{st.no_source_skipped:,}")
-    t.add_row("commits used", f"[bold]{st.commits_used:,}[/bold]")
-    t.add_row("eval cases", f"[bold green]{st.eval_cases:,}[/bold green]")
+    t.add_row(f"  skipped: >{evidence_max_files} files (evidence)", f"{st.too_large_skipped:,}")
+    t.add_row("commits used for evidence", f"[bold]{st.commits_used:,}[/bold]")
+    t.add_row(f"  of those, >{eval_max_files} files (no case)", f"{st.too_large_for_eval:,}")
+    t.add_row("eval cases (raw)", f"[bold green]{st.eval_cases:,}[/bold green]")
     console.print(t)
 
     edges = co_change_edges(hist)
@@ -94,8 +114,77 @@ def history(
     _write(out / "cochange.json", edges)
     _write(out / "evalset.json", [c.to_dict() for c in hist.cases])
     console.print(
-        "\n[dim]evalset.json is your ground truth. Nothing in this project is worth "
-        "trusting until it is scored against it.[/dim]"
+        "\n[yellow]Raw — not yet usable for scoring.[/yellow] "
+        "Run [bold]labgo benchmark[/bold] to filter out temporally-unanswerable cases (D008)."
+    )
+
+
+@app.command()
+def benchmark(
+    repo: Path = typer.Argument(..., help="Corpus repo — will be pinned at its current HEAD"),
+    name: str = typer.Option(..., "--name", "-n", help="Benchmark name, e.g. 'httpx'"),
+    out: Path = typer.Option(Path("benchmarks"), "--out", "-o"),
+    max_commits: int = typer.Option(2000, "--max-commits"),
+    evidence_max_files: int = typer.Option(20, "--evidence-max-files"),
+    eval_max_files: int = typer.Option(10, "--eval-max-files"),
+) -> None:
+    """Build a pinned, committed benchmark: answerable cases + provenance manifest."""
+    hist = extract_history(
+        repo,
+        max_commits=max_commits,
+        evidence_max_files=evidence_max_files,
+        eval_max_files=eval_max_files,
+    )
+    sha = corpus_sha(repo)
+    live = files_at(repo, sha)
+    kept, report = filter_answerable(hist.cases, live)
+
+    t = Table(title=f"Benchmark '{name}'", show_header=False, title_style="bold")
+    t.add_row("corpus sha", f"[dim]{sha[:12]}[/dim]")
+    t.add_row("files in tree", f"{len(live):,}")
+    t.add_row("", "")
+    t.add_row("raw cases", f"{report.before:,}")
+    t.add_row("  dropped: seed deleted", f"[yellow]{report.dropped_dead_seed:,}[/yellow]")
+    t.add_row("  dropped: expected deleted", f"[yellow]{report.dropped_dead_expected:,}[/yellow]")
+    t.add_row("answerable cases", f"[bold green]{report.after:,}[/bold green]")
+    t.add_row("dropped", f"[bold]{report.dropped_pct:.1f}%[/bold]")
+    console.print(t)
+
+    if report.after == 0:
+        console.print("\n[red]No answerable cases. Refusing to write an empty benchmark.[/red]")
+        raise typer.Exit(1)
+
+    bench = write_benchmark(
+        out_dir=out, name=name, repo=repo, cases=kept, report=report,
+        extraction={
+            "max_commits": max_commits,
+            "evidence_max_files": evidence_max_files,
+            "eval_max_files": eval_max_files,
+            "min_files": 2,
+        },
+    )
+    console.print(f"\n  [dim]wrote[/dim] {bench}/manifest.json\n  [dim]wrote[/dim] {bench}/cases.json")
+    console.print(
+        "\n[dim]Commit this directory. Regenerating it changes the exam — do that as a "
+        "logged decision, not as a side effect of updating the corpus.[/dim]"
+    )
+
+
+@app.command()
+def verify(
+    bench_dir: Path = typer.Argument(..., help="Benchmark directory"),
+    repo: Path = typer.Argument(..., help="Corpus repo to check"),
+) -> None:
+    """Check the corpus is at the commit a benchmark was built against."""
+    manifest, cases = load_benchmark(bench_dir)
+    try:
+        verify_corpus(manifest, repo)
+    except CorpusMismatch as exc:
+        console.print(f"[bold red]corpus mismatch[/bold red]\n{exc}")
+        raise typer.Exit(1)
+    console.print(
+        f"[bold green]ok[/bold green]  '{manifest['name']}' · "
+        f"{len(cases):,} cases · corpus at {manifest['corpus']['sha'][:12]}"
     )
 
 
