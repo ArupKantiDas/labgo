@@ -78,6 +78,8 @@ ignore = [
                 # Typer API. Following this rule would mean not using the library.
     "PLR0913",  # too-many-arguments  ─┐ A CLI command's arguments are its flags; the
     "PLR0917",  # too-many-positional ─┘ count is set by the interface, not by design.
+    "FBT001",   # boolean-typed positional arg   ─┐ `--open/--no-open` boolean flags are
+    "FBT003",   # boolean positional value in call ┘ also the Typer API, via typer.Option(True, ...).
 ]
 "tests/*" = [
     "S101",     # assert is the point of a test

@@ -50,9 +50,34 @@ git clone --filter=blob:none https://github.com/encode/httpx.git ../labgo-corpor
 
 uv run labgo ingest  ../labgo-corpora/httpx   # -> data/graph.json
 uv run labgo history ../labgo-corpora/httpx   # -> data/cochange.json, data/evalset.json
+uv run labgo view                             # -> http://127.0.0.1:4173
 ```
 
-Neither command needs a database, an API key, or a network call.
+None of the three needs a database, an API key, or a network call.
+
+## Impact viewer
+
+`labgo view` serves an interactive graph of whatever you just ingested — point it at
+your own repo, not just httpx. Two modes:
+
+- **Explore** — the raw code graph. Search, click through call/import/test edges, inspect
+  any node.
+- **Impact** — pick a file or function and see what would be affected by changing it,
+  *before* you change it: everything that calls it (or calls its callers — hop depth is
+  adjustable), plus files that have historically changed alongside it in git history. The
+  two signals are deliberately separate, for the same reason the project measures retrieval
+  and generation separately (see [`WHY.md`](WHY.md)) — static call resolution is only 27%
+  complete on httpx (D004), so co-change evidence catches real coupling the call graph
+  misses.
+
+The viewer ships prebuilt in `viewer/dist/`, so `labgo view` needs no Node at runtime —
+only `data/graph.json` (from `ingest`) and, optionally, `data/cochange.json` (from
+`history`) for the co-change half of impact mode. Node is only needed if you're changing
+the frontend itself:
+
+```bash
+cd viewer && npm install && npm run build   # regenerates viewer/dist/
+```
 
 ## Measured on httpx (1,523 commits, 60 Python files)
 
@@ -88,6 +113,8 @@ src/labgo/
     models.py   graph schema (nodes, edges, confidence tiers, metrics)
     pyast.py    Python AST -> call/import graph
     gitlog.py   git history -> co-change edges + eval set
-  cli.py
+  benchmark.py  pinned, reproducible benchmarks (D008)
+  cli.py        ingest / history / benchmark / verify / view
+viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
 DECISIONS.md    append-only decision log
 ```

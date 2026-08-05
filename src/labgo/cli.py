@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import http.server
 import json
+import threading
+import webbrowser
 from pathlib import Path
 
 import typer
@@ -192,6 +195,95 @@ def verify(
         f"[bold green]ok[/bold green]  '{manifest['name']}' · "
         f"{len(cases):,} cases · corpus at {manifest['corpus']['sha'][:12]}"
     )
+
+
+def _view_handler(
+    dist_dir: Path, graph_path: Path, cochange_path: Path
+) -> type[http.server.SimpleHTTPRequestHandler]:
+    """Build a handler serving the prebuilt viewer, with data routed live from disk.
+
+    `dist/` ships committed to the repo so `labgo view` needs no Node at runtime —
+    but it must never serve a graph baked in at *build* time, because that would be
+    whatever corpus the maintainer last ingested, not the user's own repo. So
+    /graph.json and /cochange.json are the two paths this handler intercepts and
+    re-points at the live data directory; everything else falls through to the
+    static bundle.
+    """
+
+    class ViewHandler(http.server.SimpleHTTPRequestHandler):
+        """SimpleHTTPRequestHandler bound to dist/, with data routes overridden."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            """Bind the handler to the prebuilt viewer bundle."""
+            super().__init__(*args, directory=str(dist_dir), **kwargs)
+
+        def translate_path(self, path: str) -> str:
+            """Route the two data endpoints to the live data dir, not dist/."""
+            if path == "/graph.json":
+                return str(graph_path)
+            if path == "/cochange.json" and cochange_path.exists():
+                return str(cochange_path)
+            return super().translate_path(path)
+
+    return ViewHandler
+
+
+@app.command()
+def view(
+    data: Path = typer.Option(
+        Path("data"), "--data", "-d", help="Directory with graph.json / cochange.json"
+    ),
+    port: int = typer.Option(4173, "--port", "-p"),
+    open_browser: bool = typer.Option(
+        True, "--open/--no-open", help="Open the viewer in a browser"
+    ),
+) -> None:
+    """Serve the interactive impact viewer. No Node, database, or LLM at runtime."""
+    repo_root = Path(__file__).resolve().parents[2]
+    dist_dir = repo_root / "viewer" / "dist"
+    graph_path = data / "graph.json"
+    cochange_path = data / "cochange.json"
+
+    if not dist_dir.exists():
+        console.print(
+            f"[bold red]{dist_dir} not found.[/bold red] Build it once with:\n"
+            "  cd viewer && npm install && npm run build"
+        )
+        raise typer.Exit(1)
+    if not graph_path.exists():
+        console.print(
+            f"[bold red]{graph_path} not found.[/bold red] "
+            "Run [bold]labgo ingest <repo>[/bold] first."
+        )
+        raise typer.Exit(1)
+    if not cochange_path.exists():
+        console.print(
+            f"[yellow]{cochange_path} not found[/yellow] — impact mode will show call-graph "
+            "reach but no co-change history. Run [bold]labgo history <repo>[/bold] to add it."
+        )
+
+    try:
+        server = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", port), _view_handler(dist_dir, graph_path, cochange_path)
+        )
+    except OSError as exc:
+        console.print(
+            f"[bold red]could not bind to port {port}:[/bold red] {exc}\n"
+            f"Try [bold]labgo view --port {port + 1}[/bold]"
+        )
+        raise typer.Exit(1) from exc
+
+    url = f"http://127.0.0.1:{port}"
+    console.print(
+        f"\n[bold green]serving[/bold green] {url}  [dim](data: {data}/, ctrl-c to stop)[/dim]"
+    )
+    if open_browser:
+        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[dim]stopped[/dim]")
 
 
 if __name__ == "__main__":
