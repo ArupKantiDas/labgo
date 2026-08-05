@@ -9,9 +9,11 @@ import webbrowser
 from pathlib import Path
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
+from labgo.baseline import score_baseline
 from labgo.benchmark import (
     CorpusMismatchError,
     corpus_sha,
@@ -21,9 +23,12 @@ from labgo.benchmark import (
     verify_corpus,
     write_benchmark,
 )
+from labgo.graph import clear_database, connect, load_graph, read_graph_json
 from labgo.ingest.gitlog import co_change_edges, extract_history
 from labgo.ingest.models import EdgeKind, NodeKind
 from labgo.ingest.pyast import extract_repo
+
+load_dotenv()  # NEO4J_*, VOYAGE_API_KEY, etc. — see .env.example
 
 app = typer.Typer(add_completion=False, help="Change Impact Analyst")
 console = Console()
@@ -194,6 +199,77 @@ def verify(
     console.print(
         f"[bold green]ok[/bold green]  '{manifest['name']}' · "
         f"{len(cases):,} cases · corpus at {manifest['corpus']['sha'][:12]}"
+    )
+
+
+@app.command()
+def load(
+    data: Path = typer.Option(Path("data"), "--data", "-d", help="Dir with graph.json"),
+    clear: bool = typer.Option(
+        False, "--clear", help="Wipe the database before loading (default: MERGE over what's there)"
+    ),
+    uri: str = typer.Option(None, "--uri", help="Default: $NEO4J_URI or bolt://localhost:7687"),
+    user: str = typer.Option(None, "--user", help="Default: $NEO4J_USER or neo4j"),
+    password: str = typer.Option(None, "--password", help="Default: $NEO4J_PASSWORD"),
+) -> None:
+    """Load graph.json (+ cochange.json, if present) into Neo4j. `docker compose up -d` first."""
+    graph_path = data / "graph.json"
+    if not graph_path.exists():
+        console.print(
+            f"[bold red]{graph_path} not found.[/bold red] Run [bold]labgo ingest[/bold] first."
+        )
+        raise typer.Exit(1)
+
+    graph, cochange = read_graph_json(data)
+    driver = connect(uri, user, password)
+    try:
+        if clear:
+            clear_database(driver)
+        stats = load_graph(driver, graph, cochange)
+    finally:
+        driver.close()
+
+    t = Table(title="Loaded into Neo4j", show_header=False, title_style="bold")
+    t.add_row("nodes", f"{stats.nodes:,}")
+    t.add_row("edges (CALLS/IMPORTS/CONTAINS/TESTS)", f"{stats.edges:,}")
+    t.add_row("edges (CO_CHANGED)", f"{stats.cochange_edges:,}")
+    console.print(t)
+
+
+@app.command()
+def baseline(
+    bench_dir: Path = typer.Argument(..., help="Benchmark directory, e.g. benchmarks/httpx"),
+    hops: int = typer.Option(2, "--hops", help="CALLS traversal depth"),
+    cochange: bool = typer.Option(
+        True, "--cochange/--no-cochange", help="Include CO_CHANGED neighbors in the prediction"
+    ),
+    uri: str = typer.Option(None, "--uri"),
+    user: str = typer.Option(None, "--user"),
+    password: str = typer.Option(None, "--password"),
+) -> None:
+    """Score the deterministic Cypher baseline against a pinned benchmark. No LLM, no vectors."""
+    manifest, cases = load_benchmark(bench_dir)
+    driver = connect(uri, user, password)
+    try:
+        result, _ = score_baseline(driver, cases, hops=hops, use_cochange=cochange)
+    finally:
+        driver.close()
+
+    t = Table(
+        title=f"Deterministic baseline — '{manifest['name']}' "
+        f"(hops={hops}, cochange={'on' if cochange else 'off'})",
+        show_header=False,
+        title_style="bold",
+    )
+    t.add_row("cases scored", f"{result.n_cases:,}")
+    t.add_row("mean recall", f"[bold]{result.recall_mean:.1%}[/bold]")
+    t.add_row("mean precision", f"{result.precision_mean:.1%}")
+    t.add_row("hit rate (recall > 0)", f"{result.hit_rate:.1%}")
+    t.add_row("empty predictions", f"[dim]{result.empty_predictions:,}[/dim]")
+    console.print(t)
+    console.print(
+        "\n[dim]This is the number every later stage has to beat. "
+        "Record it in DECISIONS.md before adding vectors or agents.[/dim]"
     )
 
 

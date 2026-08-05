@@ -245,6 +245,71 @@ threshold silently tunes the exam to match the evidence, which is a mild form of
 
 ---
 
+## D011 — Embeddings: Voyage (cloud) over local Ollama, overriding the local-only default
+**Date:** 2026-08-05 · **Status:** accepted
+
+Stage 3 needs a dense vector index over docstrings/functions. The original plan (README,
+pre-D011) was local-only: `nomic-embed-text` via Ollama, chosen to keep the whole project
+free, offline, and consistent with the no-cloud-providers stance in [[D001]]'s spirit.
+
+**Changed because:** the dev laptop is already resource-constrained, and running an
+embedding model locally (even a small one, via Ollama) competes with everything else
+running on the machine. Voyage's `voyage-code-3` is a hosted, code-specialized embedding
+API — no local compute, and plausibly better retrieval quality than a general-purpose
+local model, which matters here because Stage 3's job is to show what vector search's
+*ceiling* looks like against the graph baseline (D001). A weaker embedding model would
+be a weaker demonstration of that ceiling, not just a cost saving.
+
+**Consequence:** this is no longer a 100%-local project. Requires `VOYAGE_API_KEY` and
+network access at index-build and query time; has a free tier but can accrue per-token
+cost beyond it. `README.md`'s "Local only — no cloud providers by design" line and stack
+table are updated accordingly.
+
+**Not reopening:** graph loading (Neo4j, local Docker) and inference routing choices are
+unaffected — this decision is scoped to the embedding step only.
+
+---
+
+## D012 — The deterministic baseline leaks against its own eval set via CO_CHANGED
+**Date:** 2026-08-05 · **Status:** open — needs leave-one-out fix before the combined number is quotable
+
+First Stage 2 measurement, httpx benchmark (236 cases), 2-hop CALLS traversal:
+
+| | recall (mean) | precision (mean) | hit rate | empty predictions |
+|---|---|---|---|---|
+| call-graph only | 22.4% | 12.2% | 28.8% | 94 |
+| call-graph + CO_CHANGED | **94.9%** | 7.2% | 97.5% | 1 |
+
+The 4x jump is not a capability difference — it's leakage. `expected` (D002) and the
+`CO_CHANGED` edges (D009) are mined from the *same* git history, and every eval case's
+originating commit is **guaranteed** to also fall inside the co-change evidence window:
+the committed benchmark's `manifest.json` has `eval_max_files=10 <= evidence_max_files=20`,
+so any commit small enough to produce an eval case is, by construction, small enough to
+also contribute to `hist.pairs`. The exact commit being scored supplies part of the
+CO_CHANGED edge weight used to predict it — the predictor gets partial credit for having
+seen the answer.
+
+**Consequence:** 94.9% is not a fair "beat this" target. **22.4% (call-graph only) is the
+honest Stage 2 floor** — CALLS edges are structural, mined independently of history, so
+that number is clean. It is also low enough to be a believable floor: only 27.2% of calls
+resolve statically at all (D004), so a 2-hop closure over an incomplete graph missing most
+of its edges recovering 22.4% of a noisy label set (D009) is plausible, not suspicious.
+
+**Not a reason to drop CO_CHANGED as a signal** — historical coupling between files that
+happens to be independent of any one test commit is real evidence (the whole argument for
+D002/D009). It means *this specific measurement* of the combined signal is contaminated,
+not that the signal itself is worthless.
+
+**Fix (not yet built) — leave-one-out mining:** when scoring case C from commit `sha_C`,
+exclude `sha_C`'s contribution to `hist.pairs` before computing the CO_CHANGED edges used
+to predict C. Requires rebuilding evidence per-case (or at least per-commit) rather than
+once globally, so it is real added cost, not a one-line fix.
+
+**Until fixed:** report the call-graph-only number as the citable baseline; the combined
+number may be shown for direction but must carry this caveat every time.
+
+---
+
 ## Template
 
 ```

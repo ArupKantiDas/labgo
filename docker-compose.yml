@@ -1,0 +1,23 @@
+# Local Neo4j only — no managed/cloud graph service (D001: the graph is load-bearing,
+# but that doesn't mean it needs to be hosted). Community edition, single instance.
+services:
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474" # browser UI
+      - "7687:7687" # bolt (driver connections)
+    environment:
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-labgo-local-dev}
+      # Small commit-and-forget dataset (httpx: ~1.3k nodes) — defaults are plenty.
+      - NEO4J_server_memory_pagecache_size=512M
+      - NEO4J_server_memory_heap_max__size=1G
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "${NEO4J_PASSWORD:-labgo-local-dev}", "RETURN 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  neo4j_data:

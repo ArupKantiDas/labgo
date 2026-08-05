@@ -5,6 +5,10 @@ __pycache__/
 .pytest_cache/
 repos/
 
+# Local Claude Code settings — machine-specific (absolute paths, personal
+# permission allowlist), not project config.
+.claude/
+
 # Generated artifacts — regenerable from corpus + code.
 data/
 

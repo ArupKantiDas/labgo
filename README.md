@@ -31,8 +31,8 @@ choice (see [`DECISIONS.md`](DECISIONS.md)):
 | Stage | | |
 |---|---|---|
 | 1 | AST → code graph, git → eval set | ✅ done |
-| 2 | Neo4j loader + **deterministic Cypher baseline, measured** | next |
-| 3 | Vector index (local embeddings) + hybrid retrieval routing | |
+| 2 | Neo4j loader + **deterministic Cypher baseline, measured** | ✅ done |
+| 3 | Vector index (Voyage embeddings) + hybrid retrieval routing | next |
 | 4 | LangGraph multi-agent workflow | |
 | 5 | MCP server — query it from Claude Code | |
 | 6 | Observability (traces, cost/latency) + eval suite in CI | |
@@ -40,6 +40,12 @@ choice (see [`DECISIONS.md`](DECISIONS.md)):
 **Stage 2 is the one that matters.** A deterministic baseline, scored before any LLM is
 added, is what proves the agents earned their place. Skipping it means never being able to
 answer "how do you know the agents helped?"
+
+**Stage 2 result (httpx, 236 cases, 2-hop CALLS closure, no LLM):** 22.4% mean recall,
+28.8% hit rate, call-graph only. A naive combined score with CO_CHANGED reads as 94.9% but
+is **leakage, not signal** (D012) — the eval labels and
+the CO_CHANGED edges are mined from the same git history. 22.4% is the honest number every
+later stage has to beat.
 
 ## Quickstart
 
@@ -57,6 +63,17 @@ uv run labgo view                             # -> http://127.0.0.1:4173
 ```
 
 None of the three needs a database, an API key, or a network call.
+
+## Stage 2: Neo4j baseline
+
+```bash
+cp .env.example .env               # fill in NEO4J_PASSWORD (defaults match docker-compose.yml)
+docker compose up -d               # local Neo4j, community edition
+uv run labgo load --clear          # data/graph.json (+cochange.json) -> Neo4j
+
+uv run labgo benchmark ../labgo-corpora/httpx --name httpx   # pin the exam (D008)
+uv run labgo baseline benchmarks/httpx --hops 2 --no-cochange  # the honest number (D012)
+```
 
 ## Impact viewer
 
@@ -99,14 +116,16 @@ the eval set proves it is the binding constraint is recorded in D004.
 
 | | |
 |---|---|
-| Graph | Neo4j |
-| Vectors | local, `nomic-embed-text` via Ollama (free, offline) |
+| Graph | Neo4j (local, Docker) |
+| Vectors | Voyage `voyage-code-3` (cloud API, code-specialized) — see D011 |
 | Orchestration | LangGraph (LangChain used thinly — raw code where chains obscure routing) |
 | Inference | Claude Sonnet 5 + Haiku 4.5 via API |
 | Tooling | MCP server exposing the graph |
 | Observability | Langfuse / OpenTelemetry |
 
-Local only — no cloud providers by design.
+Graph and orchestration run local; embeddings and inference call out to hosted APIs
+(D011 explains the embeddings trade-off — the laptop this runs on is resource-constrained,
+so local embedding generation isn't free the way it looks on paper).
 
 ## Layout
 
@@ -117,8 +136,11 @@ src/labgo/
     pyast.py    Python AST -> call/import graph
     gitlog.py   git history -> co-change edges + eval set
   benchmark.py  pinned, reproducible benchmarks (D008)
-  cli.py        ingest / history / benchmark / verify / view
+  graph.py      Neo4j loader (connect / read_graph_json / load_graph)
+  baseline.py   deterministic Cypher impact prediction + scoring (no LLM)
+  cli.py        ingest / history / benchmark / verify / load / baseline / view
 viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
 docs/file-map.html   file-by-file explainer + data flow diagram
+docker-compose.yml   local Neo4j, community edition
 DECISIONS.md    append-only decision log
 ```
