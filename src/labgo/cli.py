@@ -24,6 +24,7 @@ from labgo.benchmark import (
     write_benchmark,
 )
 from labgo.graph import clear_database, connect, load_graph, read_graph_json
+from labgo.hybrid import score_hybrid_baseline, score_vector_baseline
 from labgo.ingest.gitlog import co_change_edges, extract_history
 from labgo.ingest.models import EdgeKind, NodeKind
 from labgo.ingest.pyast import extract_repo
@@ -239,38 +240,63 @@ def load(
 @app.command()
 def baseline(
     bench_dir: Path = typer.Argument(..., help="Benchmark directory, e.g. benchmarks/httpx"),
-    hops: int = typer.Option(2, "--hops", help="CALLS traversal depth"),
-    cochange: bool = typer.Option(
-        True, "--cochange/--no-cochange", help="Include CO_CHANGED neighbors in the prediction"
+    method: str = typer.Option(
+        "calls", "--method", help="calls (Stage 2) | vectors | hybrid (Stage 3b, D015)"
     ),
+    hops: int = typer.Option(2, "--hops", help="CALLS traversal depth (calls/hybrid)"),
+    cochange: bool = typer.Option(
+        True,
+        "--cochange/--no-cochange",
+        help="Include CO_CHANGED neighbors in the prediction (calls/hybrid)",
+    ),
+    k: int = typer.Option(10, "--k", help="Vector neighbors per seed function (vectors/hybrid)"),
     uri: str = typer.Option(None, "--uri"),
     user: str = typer.Option(None, "--user"),
     password: str = typer.Option(None, "--password"),
 ) -> None:
-    """Score the deterministic Cypher baseline against a pinned benchmark. No LLM, no vectors."""
+    """Score a deterministic impact prediction against a pinned benchmark. No LLM.
+
+    `--method calls` (default) is the unchanged Stage 2 baseline (D012). `vectors` and
+    `hybrid` are Stage 3b (D015) — same benchmark, same scoring, different predictor.
+    """
     manifest, cases = load_benchmark(bench_dir)
     driver = connect(uri, user, password)
     try:
-        result, _ = score_baseline(driver, cases, hops=hops, use_cochange=cochange)
+        if method == "calls":
+            result, _ = score_baseline(driver, cases, hops=hops, use_cochange=cochange)
+            title = (
+                f"Deterministic baseline — '{manifest['name']}' "
+                f"(hops={hops}, cochange={'on' if cochange else 'off'})"
+            )
+        elif method == "vectors":
+            result, _ = score_vector_baseline(driver, cases, k=k)
+            title = f"Vector baseline — '{manifest['name']}' (k={k})"
+        elif method == "hybrid":
+            result, _ = score_hybrid_baseline(driver, cases, hops=hops, use_cochange=cochange, k=k)
+            title = (
+                f"Hybrid baseline — '{manifest['name']}' "
+                f"(hops={hops}, cochange={'on' if cochange else 'off'}, k={k})"
+            )
+        else:
+            console.print(
+                f"[bold red]unknown --method {method!r}[/bold red] — calls | vectors | hybrid"
+            )
+            raise typer.Exit(1)
     finally:
         driver.close()
 
-    t = Table(
-        title=f"Deterministic baseline — '{manifest['name']}' "
-        f"(hops={hops}, cochange={'on' if cochange else 'off'})",
-        show_header=False,
-        title_style="bold",
-    )
+    t = Table(title=title, show_header=False, title_style="bold")
     t.add_row("cases scored", f"{result.n_cases:,}")
     t.add_row("mean recall", f"[bold]{result.recall_mean:.1%}[/bold]")
     t.add_row("mean precision", f"{result.precision_mean:.1%}")
     t.add_row("hit rate (recall > 0)", f"{result.hit_rate:.1%}")
     t.add_row("empty predictions", f"[dim]{result.empty_predictions:,}[/dim]")
     console.print(t)
-    console.print(
-        "\n[dim]This is the number every later stage has to beat. "
-        "Record it in DECISIONS.md before adding vectors or agents.[/dim]"
-    )
+    if method == "calls":
+        console.print(
+            "\n[dim]This is the number every later stage has to beat. "
+            "Record it in DECISIONS.md before adding vectors or agents.[/dim]"
+        )
 
 
 @app.command()

@@ -395,6 +395,84 @@ with a number instead of an assertion.
 
 ---
 
+## D015 — Stage 3b: vector-only recall measured, an inflated-prediction bug caught first
+**Date:** 2026-08-05 · **Status:** accepted
+
+D001's claim — "vector search cannot answer transitive impact" — had been an assertion
+since Stage 1. This is the measurement. `hybrid.py` adds `predict_impact_vector()` (rank
+candidate files by their best-matching node's cosine score, no graph traversal) and
+`predict_impact_hybrid()` (naive set union of the call-graph and vector predictions),
+scored against the same 236-case benchmark `baseline.py` was scored against (D012).
+`labgo baseline` gained `--method calls|vectors|hybrid`; `--method calls` (the default) is
+byte-for-byte the old code path — reran it after the change and got the identical 22.4%
+recall / 28.8% hit rate, so nothing about Stage 2's citable number moved.
+
+**First measurement was wrong, and wrong in the informative direction.** The first version
+of `predict_impact_vector` unioned every one of a seed file's functions' own top-`k`
+nearest neighbors, unfiltered. That scored **75.5% recall** — which should have been the
+headline result disproving D001, except it wasn't measuring what it claimed to. httpx is a
+60-file corpus; checked directly, that predictor's average prediction size was **17.4
+files (max 36)** — nearly 30% of the entire repo per case — against the call-graph
+baseline's mean of 4.1 files. A predictor that returns most of the corpus scores well on
+recall for the same reason a broken clock is right twice a day, not because the vectors
+found anything specific. Same category of mistake as D012 (a flattering number that isn't
+measuring the claimed thing), different mechanism — there it was label leakage, here it was
+an unbounded prediction size.
+
+**Fix:** rank candidate files by their *single best* matching score across all the seed's
+functions, and cap the result at `k` files total (`ORDER BY best DESC LIMIT $k` in Cypher),
+so `k` means the same kind of thing `hops` does for the call-graph baseline — a bounded
+retrieval budget — regardless of how many functions the seed file happens to contain.
+
+**Measured on httpx, vector-only, sweeping `k`:**
+
+| k | mean predicted size | recall | precision | hit rate |
+|---|---|---|---|---|
+| 3 | ~6.5 | 17.1% | 13.1% | 24.6% |
+| 4 | ~7.5 | 19.3% | 13.2% | 28.0% |
+| 5 | ~8.3 | 22.3% | 12.4% | 31.8% |
+| 10 | ~8.5 | 45.5% | 9.6% | 61.0% |
+| 20 | ~9.6 | 60.7% | 7.0% | 73.3% |
+
+(Predicted size grows sub-linearly with `k` above ~10 — most seed files' functions run out
+of distinct highly-similar files before `k` is reached.)
+
+**The fair comparison is at matched prediction budget, not matched `k`.** Call-graph
+(hops=2, no cochange) predicts a mean of **4.1 files** per case. Vectors at `k=4` predict a
+comparable **~7.5 files** and score **19.3% recall / 13.2% precision** — call-graph alone
+scores **22.4% / 12.2%** (D012). At matched budget, the graph signal is at least as good as
+the vector signal for this task, which is D001's claim, now checked rather than assumed.
+Vectors *can* be pushed to higher recall (60.7% at k=20), but only by spending precision
+down to 7% — predicting a much larger slice of the corpus, the same trade the inflated
+first measurement made by accident, now made on purpose and disclosed.
+
+**Hybrid (naive union, hops=2, no cochange) beats either signal alone:**
+
+| method | k | recall | precision | hit rate |
+|---|---|---|---|---|
+| calls only | — | 22.4% | 12.2% | 28.8% |
+| vectors only | 4 | 19.3% | 13.2% | 28.0% |
+| **hybrid** | **4** | **40.1%** | **14.8%** | **53.8%** |
+| hybrid | 10 | 54.0% | 9.4% | 69.1% |
+
+At `k=4`, the hybrid nearly *doubles* recall over call-graph alone while precision also
+improves slightly (14.8% vs 12.2%) — the two signals are catching meaningfully different
+true positives rather than mostly overlapping, which is the concrete version of WHY.md's
+claim that graph and vector answer different kinds of questions. This is the first number
+in the project where combining signals helps *without* the D012-style catch of it being an
+artifact — verified by checking predicted-set sizes were comparable going in.
+
+**Consequence:** 22.4% (call-graph only) remains the citable Stage 2 floor. **40.1% recall
+/ 14.8% precision (hybrid, hops=2, no-cochange, k=4) is Stage 3b's citable result** — the
+first evidence that blending is worth the complexity, ahead of Stage 4's agents.
+
+**Not yet done:** the union is unweighted and unranked — a file predicted by both signals
+counts the same as one predicted by either alone. `k` is not tuned past this sweep. Whether
+`CO_CHANGED` (excluded here per D012) adds further honest lift on top of the hybrid, versus
+just reintroducing leakage, is untested.
+
+---
+
 ## Template
 
 ```

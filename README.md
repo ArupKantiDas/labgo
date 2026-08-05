@@ -33,8 +33,8 @@ choice (see [`DECISIONS.md`](DECISIONS.md)):
 | 1 | AST → code graph, git → eval set | ✅ done |
 | 2 | Neo4j loader + **deterministic Cypher baseline, measured** | ✅ done |
 | 3a | Vector index (Voyage embeddings over Function/Class source, D014) | ✅ done |
-| 3b | Hybrid retrieval routing + vector-only recall measured against the baseline | next |
-| 4 | LangGraph multi-agent workflow | |
+| 3b | Vector-only recall measured + naive hybrid (call-graph ∪ vectors), D015 | ✅ done |
+| 4 | LangGraph multi-agent workflow | next |
 | 5 | MCP server — query it from Claude Code | |
 | 6 | Observability (traces, cost/latency) + eval suite in CI | |
 
@@ -90,8 +90,27 @@ uv run labgo search "retry a request with exponential backoff"   # sanity-check 
 Embeds source code, not docstrings — measured on httpx, only 19.8% of functions have one,
 so a docstring-only index would silently starve 80% of nodes of any vector at all (D014).
 `labgo search` is the librarian half of the [`WHY.md`](WHY.md) distinction on its own; it
-does no graph traversal and isn't yet wired into `labgo baseline` — that blend, and a
-vector-only recall number measured against the same 236-case benchmark, is Stage 3b.
+does no graph traversal.
+
+## Stage 3b: vector-only recall + hybrid
+
+```bash
+uv run labgo baseline benchmarks/httpx --method vectors --k 4    # vector-only, matched budget
+uv run labgo baseline benchmarks/httpx --method hybrid --hops 2 --no-cochange --k 4
+```
+
+D001's claim ("vector search cannot answer transitive impact") checked with a number, not
+just asserted. At a prediction budget matched to the call-graph baseline (~4 files/case),
+vectors alone score **19.3% recall** vs. call-graph's **22.4%** — the graph signal holds up.
+But a naive union of the two — no weighting, no ranking, just `predict_impact() |
+predict_impact_vector()` — reaches **40.1% recall / 14.8% precision**, nearly double
+call-graph alone with *better* precision, meaning the two signals catch different true
+positives more often than they overlap. First measurement here actually scored 75.5% and
+was wrong: an earlier version of `predict_impact_vector` let a seed file's many functions
+each contribute their own top-k neighbors unfiltered, sweeping in ~30% of the entire
+60-file corpus per case on average. Fixed to rank by best-matching file and cap at `k`
+files total, same shape as `hops` bounding the call-graph baseline. Full sweep and the
+fair-comparison reasoning are in D015.
 
 ## Impact viewer
 
@@ -126,6 +145,7 @@ Resolution  27.2% of 2,845 in-scope call sites
 History     1,482 commits scanned -> 610 eval cases · 1,745 co-change edges
 Baseline    22.4% mean recall · 28.8% hit rate (call-graph only, 236-case benchmark, D012)
 Vectors     1,229 Function/Class nodes embedded (voyage-code-3) · 162,884 tokens billed
+Retrieval   calls 22.4% · vectors 19.3% (matched ~4-file budget) · hybrid 40.1% (D015)
 ```
 
 The 27.2% is deliberately reported rather than massaged. The residual is diagnosed —
@@ -159,6 +179,7 @@ src/labgo/
   graph.py      Neo4j loader (connect / read_graph_json / load_graph)
   baseline.py   deterministic Cypher impact prediction + scoring (no LLM)
   embed.py      Voyage embeddings over Function/Class source + Neo4j vector index (D014)
+  hybrid.py     vector-only + hybrid impact prediction, scored the same way (D015)
   cli.py        ingest / history / benchmark / verify / load / baseline / embed / search / view
 viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
 docs/file-map.html   file-by-file explainer + data flow diagram

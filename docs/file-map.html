@@ -173,7 +173,7 @@
 </style>
 
 <div class="page">
-  <p class="eyebrow">labgo · stages 1–3a · file map</p>
+  <p class="eyebrow">labgo · stages 1–3b · file map</p>
   <h1>Change Impact Analyst — what's in the tree</h1>
   <p class="dek">
     Local extraction, cloud storage: an AST walker and a git-history miner turn a repo into
@@ -201,13 +201,14 @@
     </div>
     <div class="file">
       <div class="path">DECISIONS.md</div>
-      <div class="desc">Append-only decision log, D001–D014. The most load-bearing file in the
+      <div class="desc">Append-only decision log, D001–D015. The most load-bearing file in the
       repo for understanding <em>why</em> the code looks the way it does — e.g. why builtin
       calls are excluded from the resolution-rate denominator (D005), why 45% of the eval set
       turned out to be unanswerable before it was fixed (D008), why the combined baseline
       number leaks against its own eval set (D012), why Neo4j moved from local Docker to
-      AuraDB Free (D013), and why the vector index embeds source code instead of the
-      originally-planned docstrings — only 19.8% of functions have one (D014).</div>
+      AuraDB Free (D013), why the vector index embeds source code instead of the
+      originally-planned docstrings (D014), and why the first Stage 3b vector-recall
+      measurement (75.5%) was actually an unbounded-prediction bug, not a result (D015).</div>
     </div>
   </div>
 
@@ -261,10 +262,13 @@
       eval set), <code>benchmark</code> (repo → pinned, filtered exam), <code>verify</code>
       (does a repo still match a pinned benchmark?). Stage 2, Neo4j: <code>load</code>
       (graph.json → Neo4j, <code>--clear</code> to wipe first) and <code>baseline</code>
-      (score the deterministic Cypher prediction against a pinned benchmark). Stage 3a,
-      +Voyage: <code>embed</code> and <code>search</code> — both import <code>labgo.embed</code>
-      lazily inside the command body (<code>PLC0415</code> ignored, deliberately) so the other
-      seven commands keep working without the <code>vectors</code> extra installed.
+      (score an impact prediction against a pinned benchmark — <code>--method calls</code>,
+      the default, is the unchanged Stage 2 path; <code>vectors</code>/<code>hybrid</code>
+      route to <code>hybrid.py</code>, Stage 3b, D015). Stage 3a, +Voyage: <code>embed</code>
+      and <code>search</code> — both import <code>labgo.embed</code> lazily inside the
+      command body (<code>PLC0415</code> ignored, deliberately) so the other seven commands
+      keep working without the <code>vectors</code> extra installed;
+      <code>labgo.hybrid</code> has no such dependency, so it's imported normally at the top.
       <code>view</code> is the odd one out — no repo argument, only <code>--data</code>: a
       <code>ThreadingHTTPServer</code> serves the prebuilt <code>viewer/dist/</code> bundle,
       with <code>_view_handler()</code> intercepting <code>/graph.json</code> and
@@ -343,8 +347,23 @@
       simply excludes any node without an embedding rather than erroring. Measured on httpx:
       1,229 candidates, 1,229 embedded, 162,884 tokens billed.
       <code>semantic_search()</code> is the librarian half of the <code>WHY.md</code>
-      distinction, on its own — no graph traversal, not yet blended with
-      <code>baseline.py</code> (Stage 3b).</div>
+      distinction, on its own — no graph traversal.</div>
+    </div>
+    <div class="file">
+      <div class="path">hybrid.py</div>
+      <div class="desc">Stage 3b: checks D001's claim with a number instead of an assertion.
+      <code>predict_impact_vector()</code> ranks candidate files by their single best-matching
+      node and caps the result at <code>k</code> files — the <em>first</em> version instead
+      unioned every seed function's own top-<code>k</code> neighbors unfiltered, and scored a
+      shiny 75.5% recall by sweeping in ~30% of httpx's 60-file corpus per case, the vector
+      equivalent of D012's leakage bug (D015). At a budget matched to the call-graph baseline
+      (~4 files/case), vectors alone score 19.3% — call-graph's 22.4% holds up. But
+      <code>predict_impact_hybrid()</code>, a plain set union of both signals, reaches
+      <b>40.1% recall / 14.8% precision</b> — better than either alone, meaning the two
+      signals miss different things. Imports <code>predict_impact</code> and
+      <code>CaseScore</code> from <code>baseline.py</code> and nothing from
+      <code>embed.py</code>, so it has no <code>voyageai</code> dependency: scoring reuses
+      vectors <code>labgo embed</code> already wrote, no live Voyage call needed to rerun it.</div>
     </div>
     <div class="file">
       <div class="path">__init__.py <span class="dim">(×2, empty)</span></div>
@@ -442,6 +461,19 @@
       <code>read_source()</code> extracts the right line range, and returns <code>None</code>
       rather than raising when line numbers are missing or the file's gone — no live Voyage
       or Neo4j needed.</div>
+    </div>
+    <div class="file">
+      <div class="path">tests/test_hybrid.py</div>
+      <div class="desc">The pure-Python slice of <code>hybrid.py</code>:
+      <code>aggregate_scores()</code> averages recall/precision correctly, hit rate counts
+      cases with any recall, empty predictions don't drag the precision mean to zero (same
+      guarantee <code>test_baseline.py</code> checks for <code>CaseScore</code> itself), and
+      zero cases aggregates to zeros rather than a division-by-zero crash. No live Neo4j —
+      the two Cypher-querying functions this module adds
+      (<code>predict_impact_vector</code>, <code>predict_impact_hybrid</code>) aren't unit
+      tested here, matching how <code>baseline.py</code>'s own
+      <code>predict_impact</code> isn't either; both were instead checked directly against
+      Aura while diagnosing D015's inflated-prediction bug.</div>
     </div>
   </div>
 
@@ -782,8 +814,8 @@
     </figcaption>
   </figure>
 
-  <footer>labgo · Change Impact Analyst · Stages 1–3a done (AST graph + git ground truth +
+  <footer>labgo · Change Impact Analyst · Stages 1–3b done (AST graph + git ground truth +
   interactive viewer · Neo4j deterministic baseline, 22.4% recall · Voyage vector index over
-  1,229 nodes) — Stage 3b, blending vector search into the baseline and measuring its recall
-  against the same benchmark, is next.</footer>
+  1,229 nodes · hybrid retrieval, 40.1% recall / 14.8% precision, D015) — Stage 4, a
+  LangGraph multi-agent workflow, is next.</footer>
 </div>
