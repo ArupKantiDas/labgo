@@ -9,6 +9,9 @@ multi-agent workflow — and scored against ground truth mined from git history.
 
 > **New here? Read [`WHY.md`](WHY.md) first.** It explains the problem, the idea, and the
 > reasoning in plain English, with no code. This README assumes you already have.
+>
+> **Want the file-by-file tour?** [`docs/file-map.html`](docs/file-map.html) explains what
+> every file is for and diagrams how data actually moves between them.
 
 ## Why this shape
 
@@ -116,5 +119,6 @@ src/labgo/
   benchmark.py  pinned, reproducible benchmarks (D008)
   cli.py        ingest / history / benchmark / verify / view
 viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
+docs/file-map.html   file-by-file explainer + data flow diagram
 DECISIONS.md    append-only decision log
 ```

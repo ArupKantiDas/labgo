@@ -176,8 +176,9 @@
   <p class="eyebrow">labgo · stage 1 · file map</p>
   <h1>Change Impact Analyst — what's in the tree</h1>
   <p class="dek">
-    Two programs, no database, no LLM: an AST walker that turns a Python repo into a call
-    graph, and a git-history miner that turns commits into a scored exam. Below: every file,
+    Two Python programs, no database, no LLM: an AST walker that turns a repo into a call
+    graph, and a git-history miner that turns commits into a scored exam — plus a small React
+    viewer that turns the graph into something you can click through. Below: every file,
     what it's for, and how data actually moves between them.
   </p>
 
@@ -213,7 +214,10 @@
       (<code>typer</code>, <code>rich</code>, <code>neo4j</code>); <code>langgraph</code> and
       <code>anthropic</code> are gated behind an optional <code>agents</code> extra so Stage 1
       stays fast to set up. Also pins <code>[tool.uv.workspace] exclude</code> so a cloned
-      analysis corpus never gets mistaken for a workspace member (D007).</div>
+      analysis corpus never gets mistaken for a workspace member (D007). Ruff runs in strict
+      mode; the ignore list is annotated per rule rather than blanket-disabled — e.g.
+      <code>FBT001</code>/<code>FBT003</code> are excused because <code>--open/--no-open</code>
+      boolean flags are the Typer API, not a design choice.</div>
     </div>
     <div class="file">
       <div class="path">uv.lock <span class="dim">/ .gitignore</span></div>
@@ -227,10 +231,15 @@
   <div class="filegroup">
     <div class="file">
       <div class="path">cli.py</div>
-      <div class="desc">The entry point. Four Typer commands, each a pipeline stage:
+      <div class="desc">The entry point. Five Typer commands, four of them a pipeline stage:
       <code>ingest</code> (repo → code graph), <code>history</code> (repo → raw co-change +
       eval set), <code>benchmark</code> (repo → pinned, filtered exam), <code>verify</code>
-      (does a repo still match a pinned benchmark?). No command touches a database or an LLM.</div>
+      (does a repo still match a pinned benchmark?). <code>view</code> is the odd one out — it
+      takes no repo argument, only <code>--data</code>: a <code>ThreadingHTTPServer</code>
+      serves the prebuilt <code>viewer/dist/</code> bundle, with <code>_view_handler()</code>
+      intercepting <code>/graph.json</code> and <code>/cochange.json</code> to route them to
+      whatever's on disk right now, so the committed bundle never serves a graph baked in at
+      someone else's build time. No command touches a database or an LLM.</div>
     </div>
     <div class="file">
       <div class="path">ingest/pyast.py</div>
@@ -276,6 +285,58 @@
     </div>
   </div>
 
+  <h2>Viewer — <code>viewer/</code> <span style="text-transform:none;letter-spacing:0;font-family:var(--font-mono);font-size:12px;">(React + TypeScript, dist/ committed)</span></h2>
+  <div class="filegroup">
+    <div class="file">
+      <div class="path">src/App.tsx</div>
+      <div class="desc">The whole viewer, one component. Two modes over the same force-directed
+      graph (<code>react-force-graph-2d</code>): <b>Explore</b> shows the raw graph with
+      <code>CALLS</code> edges visible by default (<code>CONTAINS</code> is 1,200+ edges and
+      would drown out everything else). <b>Impact</b> is click-driven, not hover-driven — pick
+      a node and a BFS walks the <em>reverse</em> <code>CALLS</code> adjacency (callee → caller,
+      the "what breaks if I change this" direction) out to an adjustable hop depth, colored by
+      hop distance, plus separately-highlighted co-change neighbors from
+      <code>cochange.json</code>. Camera auto-fits to whatever's currently in frame via
+      <code>zoomToFit</code>, clamped to a min/max zoom so a single isolated node doesn't fill
+      the screen.</div>
+    </div>
+    <div class="file">
+      <div class="path">src/types.ts</div>
+      <div class="desc">TypeScript mirror of the JSON schema <code>ingest/models.py</code>
+      writes (<code>RawGraph</code> / <code>RawGraphNode</code> / <code>RawGraphEdge</code>) plus
+      <code>RawCochangeEdge</code> from <code>gitlog.py</code>'s output, and the
+      <code>GraphNode</code>/<code>GraphLink</code> shapes <code>react-force-graph-2d</code>
+      wants once its simulation mutates edges to point at live node objects.</div>
+    </div>
+    <div class="file">
+      <div class="path">src/main.tsx <span class="dim">+ App.css + index.css</span></div>
+      <div class="desc">Bootstrap (mounts <code>&lt;App /&gt;</code> in strict mode) and
+      styling. No project-specific logic.</div>
+    </div>
+    <div class="file">
+      <div class="path">scripts/sync-data.mjs</div>
+      <div class="desc">Dev-only: copies <code>data/graph.json</code> and
+      <code>data/cochange.json</code> into <code>public/</code> so <code>npm run dev</code>'s
+      Vite server has something to fetch. Never runs as part of <code>npm run build</code> —
+      the production bundle must not bake in whichever corpus the maintainer last happened to
+      ingest, which is exactly what <code>cli.py</code>'s <code>_view_handler</code> exists to
+      avoid at the other end.</div>
+    </div>
+    <div class="file">
+      <div class="path">dist/ <span class="dim">(committed)</span></div>
+      <div class="desc">The prebuilt bundle <code>labgo view</code> actually serves — checked
+      into the repo so end users need no Node at runtime. Regenerate with
+      <code>cd viewer && npm install && npm run build</code>; only necessary when
+      <code>src/</code> changes.</div>
+    </div>
+    <div class="file">
+      <div class="path">package.json <span class="dim">+ vite/tsconfig/oxlint configs</span></div>
+      <div class="desc">Standard Vite + React 19 + TypeScript scaffolding. One runtime dep
+      beyond React: <code>react-force-graph-2d</code> for the canvas. Linted with
+      <code>oxlint</code> rather than ESLint.</div>
+    </div>
+  </div>
+
   <h2>Tests</h2>
   <div class="filegroup">
     <div class="file">
@@ -317,8 +378,8 @@
   <h2>Data flow</h2>
   <figure>
     <div class="diagram-scroll">
-      <svg class="dfd" viewBox="0 0 1160 700" role="img"
-           aria-label="Corpus repo feeds four CLI-driven pipelines: ingest builds the AST call graph, history mines raw co-change and eval data, benchmark reruns history plus a corpus-SHA check to produce a pinned filtered exam, and verify compares a repo's current SHA against a pinned manifest. test_ingest.py and test_benchmark.py assert the behaviour of the modules each stage depends on.">
+      <svg class="dfd" viewBox="0 0 1160 920" role="img"
+           aria-label="Corpus repo feeds four CLI-driven pipelines: ingest builds the AST call graph, history mines raw co-change and eval data, benchmark reruns history plus a corpus-SHA check to produce a pinned filtered exam, and verify compares a repo's current SHA against a pinned manifest. A fifth, independent flow — view — takes no repo argument: it serves the committed viewer/dist/ bundle and live-routes graph.json and cochange.json from disk to a browser running the Explore/Impact viewer. test_ingest.py and test_benchmark.py assert the behaviour of the modules each stage depends on.">
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" class="arrowhead"></path>
@@ -443,16 +504,42 @@
         <text x="858" y="538" font-size="12.5" font-weight="700">CorpusMismatch</text>
         <text x="844" y="553" font-size="10" class="sub">refuses to score (D008)</text>
 
-        <!-- Tests -->
-        <rect x="260" y="610" width="230" height="60" rx="7" class="box box-test"></rect>
-        <text x="274" y="634" font-size="12" font-weight="700">tests/test_ingest.py</text>
-        <text x="274" y="650" font-size="10" class="sub">asserts pyast.py + gitlog.py</text>
-        <polyline points="375,610 248,610 248,145" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
+        <!-- view flow: independent of the corpus-repo bus above — `view` takes no repo arg -->
+        <rect x="260" y="600" width="230" height="60" rx="7" class="box box-file"></rect>
+        <text x="274" y="622" font-size="12.5" font-weight="700">viewer/dist/</text>
+        <text x="274" y="638" font-size="10.5" class="sub">prebuilt bundle (committed)</text>
+        <text x="274" y="652" font-size="10" class="sub">npm run build regenerates it</text>
+        <polyline points="375,660 375,675" class="edge" marker-end="url(#arrow)"></polyline>
 
-        <rect x="550" y="610" width="230" height="60" rx="7" class="box box-test"></rect>
-        <text x="564" y="634" font-size="12" font-weight="700">tests/test_benchmark.py</text>
-        <text x="564" y="650" font-size="10" class="sub">asserts benchmark.py</text>
-        <polyline points="665,610 620,610 620,420" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
+        <rect x="260" y="675" width="230" height="95" rx="7" class="box"></rect>
+        <text x="274" y="699" font-size="12.5" font-weight="700">cli.py</text>
+        <text x="274" y="716" font-size="10.5" class="sub">view() → _view_handler()</text>
+        <text x="274" y="730" font-size="10.5" class="sub">serves dist/, live-routes</text>
+        <text x="274" y="744" font-size="9.5" class="sub">/graph.json + /cochange.json</text>
+
+        <polyline points="1060,85 1120,85 1120,705 490,705" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
+        <text x="900" y="698" text-anchor="middle" font-size="10" class="cli-label">/graph.json (live)</text>
+        <polyline points="1060,187 1140,187 1140,730 490,730" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
+        <text x="900" y="723" text-anchor="middle" font-size="10" class="cli-label">/cochange.json (live, optional)</text>
+
+        <polyline points="490,760 830,760" class="edge" marker-end="url(#arrow)"></polyline>
+
+        <rect x="830" y="725" width="230" height="70" rx="7" class="box box-file"></rect>
+        <circle cx="847" cy="749" r="4" class="dot-ok"></circle>
+        <text x="858" y="753" font-size="12.5" font-weight="700">browser</text>
+        <text x="844" y="768" font-size="10.5" class="sub">http://127.0.0.1:4173</text>
+        <text x="844" y="782" font-size="9.5" class="sub">Explore / Impact modes (App.tsx)</text>
+
+        <!-- Tests -->
+        <rect x="260" y="830" width="230" height="60" rx="7" class="box box-test"></rect>
+        <text x="274" y="854" font-size="12" font-weight="700">tests/test_ingest.py</text>
+        <text x="274" y="870" font-size="10" class="sub">asserts pyast.py + gitlog.py</text>
+        <polyline points="375,830 248,830 248,145" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
+
+        <rect x="550" y="830" width="230" height="60" rx="7" class="box box-test"></rect>
+        <text x="564" y="854" font-size="12" font-weight="700">tests/test_benchmark.py</text>
+        <text x="564" y="870" font-size="10" class="sub">asserts benchmark.py</text>
+        <polyline points="665,830 620,830 620,420" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
 
       </svg>
     </div>
@@ -464,12 +551,16 @@
       file that no longer exists, and writes the pinned exam to <code>benchmarks/httpx/</code>.
       <b>verify</b> takes that manifest's recorded SHA and checks it against the repo's SHA
       right now — mismatch refuses to score rather than returning a plausible wrong number.
-      Dashed lines mark the two test files asserting the modules above them. Not shown:
-      <code>README.md</code>, <code>WHY.md</code>, <code>DECISIONS.md</code>,
-      <code>pyproject.toml</code> — prose and config, no runtime data passes through them.
+      <b>view</b> (bottom) is deliberately off the bus — it takes no repo argument at all. It
+      serves the committed <code>viewer/dist/</code> bundle and re-reads <code>graph.json</code>
+      / <code>cochange.json</code> from disk on every request rather than at build time, so the
+      browser always sees whatever you last ingested. Dashed lines mark the two test files
+      asserting the modules above them. Not shown: <code>README.md</code>, <code>WHY.md</code>,
+      <code>DECISIONS.md</code>, <code>pyproject.toml</code> — prose and config, no runtime
+      data passes through them.
     </figcaption>
   </figure>
 
-  <footer>labgo · Change Impact Analyst · Stage 1 (AST graph + git ground truth) — Stage 2, a
-  Neo4j-backed deterministic baseline, is next.</footer>
+  <footer>labgo · Change Impact Analyst · Stage 1 (AST graph + git ground truth + interactive
+  viewer) — Stage 2, a Neo4j-backed deterministic baseline, is next.</footer>
 </div>
