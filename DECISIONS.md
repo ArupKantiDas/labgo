@@ -310,6 +310,91 @@ number may be shown for direction but must carry this caveat every time.
 
 ---
 
+## D013 — Graph store: Neo4j AuraDB Free over local Docker, overriding D001's "doesn't need to be hosted"
+**Date:** 2026-08-05 · **Status:** accepted
+
+D001 scoped the graph to be *load-bearing*, not *decorative* — it never said it had to run
+locally. `docker-compose.yml`'s original comment ("Local Neo4j only — no managed/cloud
+graph service") stated a stronger claim than D001 actually made, and D011 had already
+broken the project's local-only stance for embeddings. Once one cloud dependency
+(Voyage) is accepted for laptop-resource reasons, a second free one for the same reason
+is not a new trade-off — it's the same one, again.
+
+**Changed because:** one free AuraDB instance is available; running Neo4j in Docker
+alongside everything else on a resource-constrained laptop has the same cost as running
+embeddings locally did in D011.
+
+**Evidence (AuraDB Free tier, checked 2026-08-05):** single instance, capacity reported
+inconsistently across Neo4j's own docs as either 50k nodes / 175k relationships or 200k /
+400k — either bound comfortably covers httpx (1,301 nodes / 2,100 edges, D004). The binding
+constraint isn't capacity, it's **auto-pause**: an idle instance pauses after 72 hours and
+is deleted 30 days after that. [Source: Neo4j Aura FAQ, Neo4j community forum.]
+
+**Consequence:**
+- `NEO4J_URI` moves from `bolt://localhost:7687` to `neo4j+s://<dbid>.databases.neo4j.io`
+  (TLS-required scheme) — no code change, `connect()` (`graph.py`) already takes the URI
+  from env/args verbatim.
+- Single instance, no local/prod split — `labgo load --clear` against Aura is now a
+  destructive action against the only copy. `data/graph.json` remains the source of
+  truth and is regenerable from the corpus, so this is recoverable, just slower.
+- **Revisit if the instance gets auto-paused/deleted from inactivity** — expected for a
+  learning project touched in bursts. `docker-compose.yml` is kept, not deleted, as the
+  offline/scratch fallback for exactly that case.
+- README's "Local only" framing and Stack table updated; D001 itself is not reopened —
+  the load-bearing argument for using a graph at all is unaffected by where it's hosted.
+
+**Not reopening:** D011 (Voyage) and inference routing choices are unaffected — this
+decision is scoped to graph hosting only.
+
+---
+
+## D014 — Vector index embeds source code, not docstrings; voyageai kept out of the default install
+**Date:** 2026-08-05 · **Status:** accepted
+
+The plan going into Stage 3 (README, pre-D014, and D011) was to embed function/file
+docstrings. Before writing that, checked how much text would actually exist to embed.
+
+**Evidence (httpx):** 225 of 1,134 functions have a non-empty docstring — **19.8%**.
+A docstring-only index would leave 80% of Function nodes with no vector at all, not
+because vector search failed on them but because there was never any text to embed. That
+would make any later "vector search recall" number mostly a documentation-coverage
+measurement wearing a retrieval-quality costume — precisely the kind of misleading metric
+D005 already burned time on once.
+
+**Decided:** embed each Function/Class node's **source code**, read from the corpus using
+the line range the AST extractor already records (`node.lineno`/`end_lineno`), not stored
+redundantly in the graph itself. `voyage-code-3` is a code-specialized model (D011) — this
+is closer to its intended input than prose docstrings would have been anyway.
+
+**Measured on httpx:** 1,229 candidates (Function + Class nodes), 1,229 embedded, 0
+skipped, 162,884 tokens billed — comfortably inside Voyage's 200M-token free tier for this
+model.
+
+**Index:** a single native Neo4j vector index (`node_embedding`) on the generic `:Node`
+label's `embedding` property (D001's loader already gives every node that label), rather
+than one index per `:Function` / `:Class`. Nodes without an `embedding` property (Files,
+un-embedded nodes) are simply absent from the index — confirmed, not an error.
+
+**Consequence — dependency weight:** `voyageai` pulls in `langchain-core`, `tokenizers`,
+`huggingface-hub`, `numpy`, `pillow`, and more transitively — a much heavier install than
+"one embeddings API call" suggests, and exactly the situation the existing `agents` extra
+was designed to avoid for Stage 4. Put it in its own `vectors` extra
+(`uv sync --extra vectors`) rather than a core dependency; `cli.py` imports `labgo.embed`
+lazily inside the `embed`/`search` commands only (`PLC0415` ignored there, with a comment)
+so every other command keeps working with a plain `uv sync`.
+
+**Known follow-up, not yet acted on:** `db.index.vector.queryNodes` (used by
+`semantic_search`) logs a server-side deprecation notice — Neo4j's replacement is a
+`SEARCH` clause. Left as-is: the procedure still works, and swapping syntax before Stage 3b
+needs it is premature.
+
+**Not yet built:** blending this with the call-graph baseline, and scoring vector-only
+recall against the same 236-case benchmark used in D012 — that comparison is Stage 3b, the
+actual point of D001's "vector search cannot answer transitive impact" claim being made
+with a number instead of an assertion.
+
+---
+
 ## Template
 
 ```

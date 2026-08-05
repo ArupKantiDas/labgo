@@ -11,7 +11,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Added at Stage 3+. Kept out of the default install so Stage 1 stays fast to set up.
+# Both groups below: kept out of the default install so Stage 1/2 stay fast to set up
+# (`uv sync` alone is enough through the Neo4j baseline). `voyageai` in particular drags
+# in langchain-core/tokenizers/huggingface-hub/numpy/pillow transitively — a much
+# heavier install than its "one embeddings call" job suggests.
+vectors = [
+    "voyageai>=0.5.0",  # Stage 3 embeddings (D011, D014)
+]
 agents = [
     "langgraph>=0.2",
     "langchain-core>=0.3",
@@ -80,6 +86,10 @@ ignore = [
     "PLR0917",  # too-many-positional ─┘ count is set by the interface, not by design.
     "FBT001",   # boolean-typed positional arg   ─┐ `--open/--no-open` boolean flags are
     "FBT003",   # boolean positional value in call ┘ also the Typer API, via typer.Option(True, ...).
+    "PLC0415",  # import-outside-top-level — `embed`/`search` import `voyageai` lazily on
+                # purpose: it's an optional (`vectors`) extra, and every other command
+                # must keep working without it installed (see pyproject's optional-deps
+                # comment). A top-level import would make it a hard dependency of the CLI.
 ]
 "tests/*" = [
     "S101",     # assert is the point of a test

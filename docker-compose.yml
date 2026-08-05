@@ -1,5 +1,6 @@
-# Local Neo4j only — no managed/cloud graph service (D001: the graph is load-bearing,
-# but that doesn't mean it needs to be hosted). Community edition, single instance.
+# Optional fallback for offline work. The primary target is Neo4j AuraDB Free (D013);
+# this local Community-edition instance is a drop-in swap (see .env.example) when
+# there's no network, or as a scratch DB you can freely `--clear`.
 services:
   neo4j:
     image: neo4j:5-community

@@ -173,11 +173,13 @@
 </style>
 
 <div class="page">
-  <p class="eyebrow">labgo · stage 1 · file map</p>
+  <p class="eyebrow">labgo · stages 1–3a · file map</p>
   <h1>Change Impact Analyst — what's in the tree</h1>
   <p class="dek">
-    Two Python programs, no database, no LLM: an AST walker that turns a repo into a call
-    graph, and a git-history miner that turns commits into a scored exam — plus a small React
+    Local extraction, cloud storage: an AST walker and a git-history miner turn a repo into
+    a call graph and a scored exam with no database and no LLM (Stage 1) — then a
+    deterministic Cypher baseline over Neo4j (Stage 2) and a Voyage-embedded vector index
+    (Stage 3a) each get measured on their own before anything is blended, plus a small React
     viewer that turns the graph into something you can click through. Below: every file,
     what it's for, and how data actually moves between them.
   </p>
@@ -193,16 +195,19 @@
     <div class="file">
       <div class="path">README.md</div>
       <div class="desc">The technical front door: quickstart commands, the stage roadmap
-      (1 done, 2 next: Neo4j + a deterministic baseline), the stack table (Neo4j, local
-      embeddings, LangGraph, Claude), and the current httpx numbers.</div>
+      (1–3a done, 3b next: blend vector search into the baseline), the stack table (Neo4j
+      AuraDB, Voyage <code>voyage-code-3</code>, LangGraph, Claude), and the current httpx
+      numbers for both the call-graph baseline and the embedding index.</div>
     </div>
     <div class="file">
       <div class="path">DECISIONS.md</div>
-      <div class="desc">Append-only decision log, D001–D010. The most load-bearing file in the
+      <div class="desc">Append-only decision log, D001–D014. The most load-bearing file in the
       repo for understanding <em>why</em> the code looks the way it does — e.g. why builtin
-      calls are excluded from the resolution-rate denominator (D005), why eval cases need two
-      separate size caps instead of one (D010), and why 45% of the eval set turned out to be
-      unanswerable before it was fixed (D008).</div>
+      calls are excluded from the resolution-rate denominator (D005), why 45% of the eval set
+      turned out to be unanswerable before it was fixed (D008), why the combined baseline
+      number leaks against its own eval set (D012), why Neo4j moved from local Docker to
+      AuraDB Free (D013), and why the vector index embeds source code instead of the
+      originally-planned docstrings — only 19.8% of functions have one (D014).</div>
     </div>
   </div>
 
@@ -211,19 +216,39 @@
     <div class="file">
       <div class="path">pyproject.toml</div>
       <div class="desc">Package metadata and dependency groups. Core install is light
-      (<code>typer</code>, <code>rich</code>, <code>neo4j</code>); <code>langgraph</code> and
-      <code>anthropic</code> are gated behind an optional <code>agents</code> extra so Stage 1
-      stays fast to set up. Also pins <code>[tool.uv.workspace] exclude</code> so a cloned
-      analysis corpus never gets mistaken for a workspace member (D007). Ruff runs in strict
-      mode; the ignore list is annotated per rule rather than blanket-disabled — e.g.
-      <code>FBT001</code>/<code>FBT003</code> are excused because <code>--open/--no-open</code>
-      boolean flags are the Typer API, not a design choice.</div>
+      (<code>typer</code>, <code>rich</code>, <code>neo4j</code>); <code>langgraph</code> /
+      <code>anthropic</code> (<code>agents</code>) and <code>voyageai</code>
+      (<code>vectors</code>) are gated behind optional extras so Stage 1/2 stay fast to set
+      up — <code>voyageai</code> alone drags in langchain-core, tokenizers, huggingface-hub,
+      numpy, and pillow transitively (D014), far more than "one embeddings call" implies.
+      Also pins <code>[tool.uv.workspace] exclude</code> so a cloned analysis corpus never
+      gets mistaken for a workspace member (D007). Ruff runs in strict mode; the ignore list
+      is annotated per rule rather than blanket-disabled — e.g. <code>FBT001</code>/
+      <code>FBT003</code> are excused because <code>--open/--no-open</code> boolean flags are
+      the Typer API, and <code>PLC0415</code> is excused only in <code>cli.py</code>, only for
+      the two commands that lazily import <code>voyageai</code> so every other command still
+      runs without the <code>vectors</code> extra installed.</div>
+    </div>
+    <div class="file">
+      <div class="path">.env.example <span class="dim">→ .env</span></div>
+      <div class="desc"><code>NEO4J_URI</code> (AuraDB Free's <code>neo4j+s://</code>
+      connection string, D013 — a commented-out local-Docker fallback is included too),
+      <code>NEO4J_PASSWORD</code>, <code>VOYAGE_API_KEY</code>, and
+      <code>ANTHROPIC_API_KEY</code> (Stage 4+, unused so far). <code>.env</code> itself is
+      gitignored; <code>cli.py</code> loads it via <code>python-dotenv</code> on startup.</div>
+    </div>
+    <div class="file">
+      <div class="path">docker-compose.yml</div>
+      <div class="desc">Neo4j Community edition, single container. No longer the primary
+      target — Stage 2 points at AuraDB Free by default (D013) — but kept as an offline/
+      scratch fallback: swap three lines in <code>.env</code> and <code>labgo load --clear</code>
+      works identically against it.</div>
     </div>
     <div class="file">
       <div class="path">uv.lock <span class="dim">/ .gitignore</span></div>
       <div class="desc">Resolved dependency lockfile, and the usual ignore rules
-      (<code>.venv</code>, <code>__pycache__</code>, <code>.pytest_cache</code>). Nothing
-      project-specific here.</div>
+      (<code>.venv</code>, <code>__pycache__</code>, <code>.pytest_cache</code>, <code>.env</code>,
+      <code>data/</code>). Nothing project-specific here.</div>
     </div>
   </div>
 
@@ -231,15 +256,20 @@
   <div class="filegroup">
     <div class="file">
       <div class="path">cli.py</div>
-      <div class="desc">The entry point. Five Typer commands, four of them a pipeline stage:
+      <div class="desc">The entry point. Nine Typer commands. Stage 1, no database or LLM:
       <code>ingest</code> (repo → code graph), <code>history</code> (repo → raw co-change +
       eval set), <code>benchmark</code> (repo → pinned, filtered exam), <code>verify</code>
-      (does a repo still match a pinned benchmark?). <code>view</code> is the odd one out — it
-      takes no repo argument, only <code>--data</code>: a <code>ThreadingHTTPServer</code>
-      serves the prebuilt <code>viewer/dist/</code> bundle, with <code>_view_handler()</code>
-      intercepting <code>/graph.json</code> and <code>/cochange.json</code> to route them to
-      whatever's on disk right now, so the committed bundle never serves a graph baked in at
-      someone else's build time. No command touches a database or an LLM.</div>
+      (does a repo still match a pinned benchmark?). Stage 2, Neo4j: <code>load</code>
+      (graph.json → Neo4j, <code>--clear</code> to wipe first) and <code>baseline</code>
+      (score the deterministic Cypher prediction against a pinned benchmark). Stage 3a,
+      +Voyage: <code>embed</code> and <code>search</code> — both import <code>labgo.embed</code>
+      lazily inside the command body (<code>PLC0415</code> ignored, deliberately) so the other
+      seven commands keep working without the <code>vectors</code> extra installed.
+      <code>view</code> is the odd one out — no repo argument, only <code>--data</code>: a
+      <code>ThreadingHTTPServer</code> serves the prebuilt <code>viewer/dist/</code> bundle,
+      with <code>_view_handler()</code> intercepting <code>/graph.json</code> and
+      <code>/cochange.json</code> to route them to whatever's on disk right now, so the
+      committed bundle never serves a graph baked in at someone else's build time.</div>
     </div>
     <div class="file">
       <div class="path">ingest/pyast.py</div>
@@ -277,6 +307,44 @@
       drops any case referencing a file no longer in the tree — on httpx that was 58% of raw
       cases (D008) — and <code>verify_corpus()</code> refuses to score a benchmark against a
       repo that has since moved past that commit.</div>
+    </div>
+    <div class="file">
+      <div class="path">graph.py</div>
+      <div class="desc">Stage 2's persistence layer. <code>connect()</code> reads
+      <code>NEO4J_*</code> from explicit args or env, and fails loudly — a
+      <code>RuntimeError</code>, not a silent connection to nothing — if no password is set.
+      <code>load_graph()</code> <code>MERGE</code>s nodes and edges into Neo4j in batches,
+      idempotent so a re-ingest can always be re-loaded; every node keeps a generic
+      <code>:Node</code> label alongside its specific kind so one uniqueness constraint (and
+      later, one vector index) covers all three kinds at once. <code>CO_CHANGED</code> is
+      loaded directed but meant to be queried undirected — git history carries no inherent
+      direction between two files that changed together.</div>
+    </div>
+    <div class="file">
+      <div class="path">baseline.py</div>
+      <div class="desc">Stage 2's actual deliverable: a number, measured before any LLM
+      touches the problem. <code>predict_impact()</code> is pure Cypher — functions the seed
+      file contains, callers reachable within <code>hops</code> traversals of
+      <code>CALLS</code>, plus (optionally) <code>CO_CHANGED</code> neighbors. Measured on
+      httpx: <b>22.4% recall, 28.8% hit rate</b>, call-graph only. Combining with
+      <code>CO_CHANGED</code> reads as 94.9% but is leakage, not signal (D012) — the eval
+      labels and the co-change edges are mined from the same git history, so the exact commit
+      being scored partly supplies its own answer.</div>
+    </div>
+    <div class="file">
+      <div class="path">embed.py</div>
+      <div class="desc">Stage 3a. Embeds each Function/Class node's <em>source code</em> — not
+      the originally-planned docstrings, which only 19.8% of httpx functions have (D014) —
+      read straight off the corpus via the line range the AST extractor already recorded, so
+      nothing needs duplicating into the graph itself. Batches through
+      <code>voyage-code-3</code> (100 texts/call, comfortably under Voyage's 1,000-text/
+      120K-token caps), writes vectors onto Neo4j's generic <code>:Node</code> label, and
+      creates a native vector index (<code>node_embedding</code>, cosine similarity) that
+      simply excludes any node without an embedding rather than erroring. Measured on httpx:
+      1,229 candidates, 1,229 embedded, 162,884 tokens billed.
+      <code>semantic_search()</code> is the librarian half of the <code>WHY.md</code>
+      distinction, on its own — no graph traversal, not yet blended with
+      <code>baseline.py</code> (Stage 3b).</div>
     </div>
     <div class="file">
       <div class="path">__init__.py <span class="dim">(×2, empty)</span></div>
@@ -353,6 +421,28 @@
       case, and a corpus at the wrong commit raises <code>CorpusMismatch</code> with an
       actionable fix command rather than silently scoring the wrong world.</div>
     </div>
+    <div class="file">
+      <div class="path">tests/test_graph.py</div>
+      <div class="desc">The pure-Python slice of <code>graph.py</code>: <code>graph.json</code>
+      round-trips through <code>read_graph_json()</code> unchanged, <code>cochange.json</code>
+      is picked up when present, and — pointedly — <code>connect()</code> raises
+      <code>RuntimeError</code> rather than silently connecting to nothing when
+      <code>NEO4J_PASSWORD</code> is unset. No live database for any of these.</div>
+    </div>
+    <div class="file">
+      <div class="path">tests/test_baseline.py</div>
+      <div class="desc">The scoring math in isolation, no Neo4j: recall is share-of-expected
+      covered, precision is share-of-prediction-correct, and precision is <code>None</code>
+      (not <code>0</code>) when nothing was predicted at all — averaging that as zero would
+      punish an empty prediction twice, since it already tanks recall.</div>
+    </div>
+    <div class="file">
+      <div class="path">tests/test_embed.py</div>
+      <div class="desc">The pure-Python slice of <code>embed.py</code>:
+      <code>read_source()</code> extracts the right line range, and returns <code>None</code>
+      rather than raising when line numbers are missing or the file's gone — no live Voyage
+      or Neo4j needed.</div>
+    </div>
   </div>
 
   <h2>Generated data <span style="text-transform:none;letter-spacing:0;font-family:var(--font-mono);font-size:12px;">(not hand-written — regenerate with the CLI)</span></h2>
@@ -372,6 +462,22 @@
       <div class="desc">The committed, pinned exam: corpus SHA <code>b5addb64</code>, 236
       answerable cases surviving from 565 raw (D008), plus the extraction parameters and filter
       rule that produced them — everything needed to reproduce or invalidate the score later.</div>
+    </div>
+  </div>
+
+  <h2>Persisted — Neo4j AuraDB Free</h2>
+  <div class="filegroup">
+    <div class="file">
+      <div class="path"><span class="dim">(not a file — a database)</span></div>
+      <div class="desc">Everything above still regenerates from the corpus; this is the one
+      piece of project state that doesn't live in the repo. <code>labgo load</code> writes
+      <code>graph.json</code>'s nodes/edges plus <code>CO_CHANGED</code> into a single free
+      Aura instance (D013, switched from local Docker the same day); <code>labgo embed</code>
+      adds an <code>embedding</code> vector property + native vector index on top of the same
+      nodes. One instance, no local/prod split — <code>--clear</code> is destructive against
+      the only copy, though recoverable in one command since <code>data/graph.json</code>
+      stays the source of truth. Free tier auto-pauses after 72h idle and is deleted 30 days
+      after that; expected and accepted for a project touched in bursts.</div>
     </div>
   </div>
 
@@ -561,6 +667,123 @@
     </figcaption>
   </figure>
 
-  <footer>labgo · Change Impact Analyst · Stage 1 (AST graph + git ground truth + interactive
-  viewer) — Stage 2, a Neo4j-backed deterministic baseline, is next.</footer>
+  <h2>Data flow — Stage 2 &amp; 3a</h2>
+  <figure>
+    <div class="diagram-scroll">
+      <svg class="dfd" viewBox="0 0 1160 780" role="img"
+           aria-label="Neo4j AuraDB, on the right, is the shared sink and source for four independent CLI commands. load writes graph.json's nodes and edges plus co-change edges into it. baseline sends a Cypher traversal query and gets back file ids, scored against a pinned benchmark to a measured 22.4% recall. embed reads source text from the corpus repo, sends it to the Voyage API in batches, and writes the returned vectors plus a vector index back into Neo4j. search sends a query to Voyage for embedding, then queries Neo4j's vector index for nearest neighbours and prints them.">
+        <!-- trunk: Neo4j Aura -->
+        <rect x="950" y="20" width="190" height="700" rx="7" class="box box-source"></rect>
+        <text x="964" y="50" font-size="13" font-weight="700">Neo4j AuraDB</text>
+        <text x="964" y="68" font-size="10.5" class="sub">graph + vectors</text>
+        <text x="964" y="84" font-size="10.5" class="sub">single free instance</text>
+        <text x="964" y="98" font-size="10.5" class="sub">(D013)</text>
+
+        <!-- Row 1: load -->
+        <rect x="20" y="50" width="230" height="60" rx="7" class="box box-file"></rect>
+        <text x="34" y="76" font-size="12.5" font-weight="700">data/graph.json</text>
+        <text x="34" y="92" font-size="10.5" class="sub">+ cochange.json</text>
+
+        <rect x="310" y="40" width="280" height="80" rx="7" class="box"></rect>
+        <text x="450" y="32" text-anchor="middle" class="cli-label" font-size="10">cli.load() --clear</text>
+        <text x="324" y="66" font-size="12.5" font-weight="700">graph.py</text>
+        <text x="324" y="83" font-size="10.5" class="sub">load_graph() — MERGE nodes+edges</text>
+        <text x="324" y="97" font-size="10.5" class="sub">:Node label + CO_CHANGED (D001)</text>
+
+        <polyline points="250,80 310,80" class="edge" marker-end="url(#arrow)"></polyline>
+        <polyline points="590,80 950,80" class="edge edge-accent" marker-end="url(#arrow)"></polyline>
+        <text x="770" y="72" text-anchor="middle" font-size="10" class="cli-label">MERGE (idempotent)</text>
+
+        <!-- Row 2: baseline -->
+        <rect x="20" y="175" width="230" height="55" rx="7" class="box box-file"></rect>
+        <text x="34" y="196" font-size="12.5" font-weight="700">benchmarks/httpx/</text>
+        <text x="34" y="212" font-size="10.5" class="sub">cases.json (236, D008)</text>
+
+        <rect x="310" y="160" width="280" height="90" rx="7" class="box"></rect>
+        <text x="450" y="152" text-anchor="middle" class="cli-label" font-size="10">cli.baseline() --hops 2</text>
+        <text x="324" y="186" font-size="12.5" font-weight="700">baseline.py</text>
+        <text x="324" y="203" font-size="10.5" class="sub">predict_impact() · score_baseline()</text>
+        <text x="324" y="217" font-size="10.5" class="sub">CALLS*1..hops (+ CO_CHANGED)</text>
+        <text x="324" y="233" font-size="10.5" class="sub">no LLM, no ranking</text>
+
+        <polyline points="250,202 310,202" class="edge" marker-end="url(#arrow)"></polyline>
+        <polyline points="590,188 950,188" class="edge edge-accent" marker-end="url(#arrow)"></polyline>
+        <text x="770" y="180" text-anchor="middle" font-size="10" class="cli-label">Cypher traversal</text>
+        <polyline points="950,222 590,222" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
+        <text x="770" y="238" text-anchor="middle" font-size="10" class="cli-label">file ids (returned)</text>
+
+        <rect x="310" y="270" width="280" height="55" rx="7" class="box box-file"></rect>
+        <circle cx="327" cy="291" r="4" class="dot-ok"></circle>
+        <text x="338" y="295" font-size="12" font-weight="700">console</text>
+        <text x="324" y="311" font-size="10" class="sub">22.4% recall · 28.8% hit rate (D012)</text>
+        <polyline points="450,250 450,270" class="edge" marker-end="url(#arrow)"></polyline>
+
+        <!-- Row 3: embed -->
+        <rect x="20" y="385" width="230" height="70" rx="7" class="box box-source"></rect>
+        <text x="34" y="411" font-size="12.5" font-weight="700">corpus repo</text>
+        <text x="34" y="428" font-size="10" class="sub">../labgo-corpora/httpx</text>
+        <text x="34" y="442" font-size="10" class="sub">read_source(): lineno range → text</text>
+
+        <rect x="310" y="370" width="280" height="90" rx="7" class="box"></rect>
+        <text x="450" y="362" text-anchor="middle" class="cli-label" font-size="10">cli.embed(repo)</text>
+        <text x="324" y="396" font-size="12.5" font-weight="700">embed.py</text>
+        <text x="324" y="413" font-size="10.5" class="sub">embed_nodes() — batches of 100</text>
+        <text x="324" y="427" font-size="10.5" class="sub">ensure_vector_index()</text>
+        <text x="324" y="441" font-size="10.5" class="sub">source, not docstrings (D014)</text>
+
+        <polyline points="250,420 310,420" class="edge" marker-end="url(#arrow)"></polyline>
+        <polyline points="590,395 950,395" class="edge edge-accent" marker-end="url(#arrow)"></polyline>
+        <text x="770" y="387" text-anchor="middle" font-size="10" class="cli-label">SET n.embedding + vector index</text>
+
+        <rect x="380" y="490" width="220" height="70" rx="7" class="box box-source"></rect>
+        <text x="394" y="515" font-size="12.5" font-weight="700">Voyage API</text>
+        <text x="394" y="532" font-size="10" class="sub">voyage-code-3, input_type=document</text>
+        <text x="394" y="547" font-size="10" class="sub">162,884 tokens billed (measured)</text>
+        <polyline points="450,460 450,490" class="edge edge-accent" marker-end="url(#arrow)"></polyline>
+        <text x="460" y="478" font-size="10" class="cli-label">embed(texts)</text>
+
+        <!-- Row 4: search -->
+        <rect x="20" y="605" width="230" height="50" rx="7" class="box"></rect>
+        <text x="34" y="626" font-size="12.5" font-weight="700">query (CLI arg)</text>
+        <text x="34" y="642" font-size="10" class="sub">"retry with backoff"</text>
+
+        <rect x="310" y="590" width="280" height="80" rx="7" class="box"></rect>
+        <text x="450" y="582" text-anchor="middle" class="cli-label" font-size="10">cli.search(query, --k)</text>
+        <text x="324" y="614" font-size="12.5" font-weight="700">embed.py</text>
+        <text x="324" y="631" font-size="10.5" class="sub">semantic_search()</text>
+        <text x="324" y="645" font-size="10.5" class="sub">db.index.vector.queryNodes</text>
+
+        <polyline points="250,630 310,630" class="edge" marker-end="url(#arrow)"></polyline>
+        <polyline points="530,590 530,560" class="edge edge-accent" marker-end="url(#arrow)"></polyline>
+        <text x="540" y="578" font-size="10" class="cli-label">embed(query)</text>
+        <polyline points="590,608 950,608" class="edge edge-accent" marker-end="url(#arrow)"></polyline>
+        <text x="770" y="600" text-anchor="middle" font-size="10" class="cli-label">cosine KNN, top-k</text>
+        <polyline points="950,635 590,635" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
+        <text x="770" y="651" text-anchor="middle" font-size="10" class="cli-label">nearest ids + score</text>
+
+        <rect x="310" y="690" width="280" height="50" rx="7" class="box box-file"></rect>
+        <circle cx="327" cy="711" r="4" class="dot-ok"></circle>
+        <text x="338" y="715" font-size="12" font-weight="700">console</text>
+        <text x="324" y="731" font-size="10" class="sub">nearest Function/Class ids</text>
+        <polyline points="450,670 450,690" class="edge" marker-end="url(#arrow)"></polyline>
+      </svg>
+    </div>
+    <figcaption>
+      <b>Neo4j AuraDB</b> (right) is the shared sink and source for four independent CLI
+      commands — unlike Stage 1's diagram, there's no single bus, because each command's
+      inputs differ. <b>load</b> and <b>baseline</b> read committed JSON on the left;
+      <b>embed</b> reads the corpus repo directly (for source text) plus the <b>Voyage
+      API</b> (for vectors); <b>search</b> takes a CLI argument and calls Voyage for the query
+      embedding before querying Neo4j's vector index. Dashed lines mark values returned back
+      from Neo4j rather than written to it. Not shown: <code>tests/test_graph.py</code>,
+      <code>test_baseline.py</code>, and <code>test_embed.py</code> assert the pure-Python
+      parts of the three modules above without touching a live database or API — see the
+      Tests section.
+    </figcaption>
+  </figure>
+
+  <footer>labgo · Change Impact Analyst · Stages 1–3a done (AST graph + git ground truth +
+  interactive viewer · Neo4j deterministic baseline, 22.4% recall · Voyage vector index over
+  1,229 nodes) — Stage 3b, blending vector search into the baseline and measuring its recall
+  against the same benchmark, is next.</footer>
 </div>

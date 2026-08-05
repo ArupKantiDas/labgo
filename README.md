@@ -4,8 +4,8 @@ Ask a codebase: **"if I change this, what breaks, which tests must run, and who 
 review it?"**
 
 A knowledge graph of a real repository (files, functions, call edges, imports, test
-coverage, git co-change, ownership) plus semantic search over docstrings, queried by a
-multi-agent workflow — and scored against ground truth mined from git history.
+coverage, git co-change, ownership) plus semantic search over function/class source code,
+queried by a multi-agent workflow — and scored against ground truth mined from git history.
 
 > **New here? Read [`WHY.md`](WHY.md) first.** It explains the problem, the idea, and the
 > reasoning in plain English, with no code. This README assumes you already have.
@@ -32,7 +32,8 @@ choice (see [`DECISIONS.md`](DECISIONS.md)):
 |---|---|---|
 | 1 | AST → code graph, git → eval set | ✅ done |
 | 2 | Neo4j loader + **deterministic Cypher baseline, measured** | ✅ done |
-| 3 | Vector index (Voyage embeddings) + hybrid retrieval routing | next |
+| 3a | Vector index (Voyage embeddings over Function/Class source, D014) | ✅ done |
+| 3b | Hybrid retrieval routing + vector-only recall measured against the baseline | next |
 | 4 | LangGraph multi-agent workflow | |
 | 5 | MCP server — query it from Claude Code | |
 | 6 | Observability (traces, cost/latency) + eval suite in CI | |
@@ -67,13 +68,30 @@ None of the three needs a database, an API key, or a network call.
 ## Stage 2: Neo4j baseline
 
 ```bash
-cp .env.example .env               # fill in NEO4J_PASSWORD (defaults match docker-compose.yml)
-docker compose up -d               # local Neo4j, community edition
+cp .env.example .env               # fill in NEO4J_URI / NEO4J_PASSWORD from your Aura console (D013)
 uv run labgo load --clear          # data/graph.json (+cochange.json) -> Neo4j
 
 uv run labgo benchmark ../labgo-corpora/httpx --name httpx   # pin the exam (D008)
 uv run labgo baseline benchmarks/httpx --hops 2 --no-cochange  # the honest number (D012)
 ```
+
+No local database needed — the default target is a Neo4j AuraDB Free instance (D013).
+`docker compose up -d` still works as an offline/local fallback; swap the three `NEO4J_*`
+lines in `.env` per the comment in `.env.example`.
+
+## Stage 3a: Vector index
+
+```bash
+uv sync --extra vectors              # pulls in voyageai — kept out of the default install
+uv run labgo embed ../labgo-corpora/httpx   # embeds every Function/Class node's source -> Neo4j
+uv run labgo search "retry a request with exponential backoff"   # sanity-check retrieval
+```
+
+Embeds source code, not docstrings — measured on httpx, only 19.8% of functions have one,
+so a docstring-only index would silently starve 80% of nodes of any vector at all (D014).
+`labgo search` is the librarian half of the [`WHY.md`](WHY.md) distinction on its own; it
+does no graph traversal and isn't yet wired into `labgo baseline` — that blend, and a
+vector-only recall number measured against the same 236-case benchmark, is Stage 3b.
 
 ## Impact viewer
 
@@ -106,6 +124,8 @@ AST         1,301 nodes · 2,100 edges (567 CALLS · 35 IMPORTS · 257 TESTS)
 Resolution  27.2% of 2,845 in-scope call sites
             4 exact · 99 self/cls · 327 local · 343 heuristic · 2,072 unresolved
 History     1,482 commits scanned -> 610 eval cases · 1,745 co-change edges
+Baseline    22.4% mean recall · 28.8% hit rate (call-graph only, 236-case benchmark, D012)
+Vectors     1,229 Function/Class nodes embedded (voyage-code-3) · 162,884 tokens billed
 ```
 
 The 27.2% is deliberately reported rather than massaged. The residual is diagnosed —
@@ -116,16 +136,16 @@ the eval set proves it is the binding constraint is recorded in D004.
 
 | | |
 |---|---|
-| Graph | Neo4j (local, Docker) |
+| Graph | Neo4j (AuraDB Free, cloud) — see D013 |
 | Vectors | Voyage `voyage-code-3` (cloud API, code-specialized) — see D011 |
 | Orchestration | LangGraph (LangChain used thinly — raw code where chains obscure routing) |
 | Inference | Claude Sonnet 5 + Haiku 4.5 via API |
 | Tooling | MCP server exposing the graph |
 | Observability | Langfuse / OpenTelemetry |
 
-Graph and orchestration run local; embeddings and inference call out to hosted APIs
-(D011 explains the embeddings trade-off — the laptop this runs on is resource-constrained,
-so local embedding generation isn't free the way it looks on paper).
+Orchestration runs local; the graph, embeddings, and inference all call out to hosted APIs
+(D011 and D013 explain the trade-off — the laptop this runs on is resource-constrained,
+so running Neo4j or an embedding model locally isn't free the way it looks on paper).
 
 ## Layout
 
@@ -138,7 +158,8 @@ src/labgo/
   benchmark.py  pinned, reproducible benchmarks (D008)
   graph.py      Neo4j loader (connect / read_graph_json / load_graph)
   baseline.py   deterministic Cypher impact prediction + scoring (no LLM)
-  cli.py        ingest / history / benchmark / verify / load / baseline / view
+  embed.py      Voyage embeddings over Function/Class source + Neo4j vector index (D014)
+  cli.py        ingest / history / benchmark / verify / load / baseline / embed / search / view
 viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
 docs/file-map.html   file-by-file explainer + data flow diagram
 docker-compose.yml   local Neo4j, community edition

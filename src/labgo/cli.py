@@ -273,6 +273,66 @@ def baseline(
     )
 
 
+@app.command()
+def embed(
+    repo: Path = typer.Argument(..., help="Corpus repo — source of the text that gets embedded"),
+    uri: str = typer.Option(None, "--uri"),
+    user: str = typer.Option(None, "--user"),
+    password: str = typer.Option(None, "--password"),
+    api_key: str = typer.Option(None, "--api-key", help="Default: $VOYAGE_API_KEY"),
+) -> None:
+    """Embed every Function/Class node's source with Voyage and index it in Neo4j (D014).
+
+    Requires `labgo load` first (reads node metadata from Neo4j, not graph.json) and the
+    `vectors` extra: `uv sync --extra vectors`.
+    """
+    from labgo.embed import EMBED_DIM, EMBED_MODEL, INDEX_NAME, embed_nodes
+
+    driver = connect(uri, user, password)
+    try:
+        stats = embed_nodes(driver, repo, api_key=api_key)
+    finally:
+        driver.close()
+
+    t = Table(title="Embedded into Neo4j", show_header=False, title_style="bold")
+    t.add_row("candidates (Function + Class)", f"{stats.candidates:,}")
+    t.add_row("embedded", f"[bold]{stats.embedded:,}[/bold]")
+    t.add_row("skipped (source unavailable)", f"[dim]{stats.skipped_no_source:,}[/dim]")
+    t.add_row("tokens billed", f"{stats.total_tokens:,}")
+    console.print(t)
+    console.print(f"\n[dim]model: {EMBED_MODEL} · dim: {EMBED_DIM} · index: '{INDEX_NAME}'[/dim]")
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Natural-language or code-like query"),
+    k: int = typer.Option(10, "--k", help="Number of nearest neighbours"),
+    uri: str = typer.Option(None, "--uri"),
+    user: str = typer.Option(None, "--user"),
+    password: str = typer.Option(None, "--password"),
+    api_key: str = typer.Option(None, "--api-key", help="Default: $VOYAGE_API_KEY"),
+) -> None:
+    """Semantic search over embedded Function/Class nodes. No graph traversal, no LLM.
+
+    The librarian half of the WHY.md distinction, run in isolation — run `labgo baseline`
+    for the subway-map half. Requires `labgo embed` first.
+    """
+    from labgo.embed import semantic_search as _semantic_search
+
+    driver = connect(uri, user, password)
+    try:
+        hits = _semantic_search(driver, query, k=k, api_key=api_key)
+    finally:
+        driver.close()
+
+    t = Table(title=f"Nearest to: {query!r}")
+    t.add_column("score")
+    t.add_column("id")
+    for h in hits:
+        t.add_row(f"{h['score']:.3f}", h["id"])
+    console.print(t)
+
+
 def _view_handler(
     dist_dir: Path, graph_path: Path, cochange_path: Path
 ) -> type[http.server.SimpleHTTPRequestHandler]:
