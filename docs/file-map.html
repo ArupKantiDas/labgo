@@ -270,10 +270,10 @@
       <div class="stage-stat">5 tools · stdio<br>verified w/ real client</div>
     </div>
     <span class="stage-arrow">›</span>
-    <div class="stage-card next">
-      <div class="stage-num">6</div>
+    <div class="stage-card done">
+      <div class="stage-num">✓ 6</div>
       <div class="stage-name">Observability + CI eval</div>
-      <div class="stage-stat">next</div>
+      <div class="stage-stat">OTel traces · D017<br>CI: 46 tests, no live deps</div>
     </div>
   </div>
 
@@ -566,26 +566,40 @@
     <div class="file">
       <div class="path">pyproject.toml</div>
       <div class="desc">Package metadata and dependency groups. Core install is light
-      (<code>typer</code>, <code>rich</code>, <code>neo4j</code>); <code>langgraph</code> /
-      <code>anthropic</code> (<code>agents</code>) and <code>voyageai</code>
-      (<code>vectors</code>) are gated behind optional extras so Stage 1/2 stay fast to set
-      up — <code>voyageai</code> alone drags in langchain-core, tokenizers, huggingface-hub,
-      numpy, and pillow transitively (D014), far more than "one embeddings call" implies.
-      Also pins <code>[tool.uv.workspace] exclude</code> so a cloned analysis corpus never
-      gets mistaken for a workspace member (D007). Ruff runs in strict mode; the ignore list
-      is annotated per rule rather than blanket-disabled — e.g. <code>FBT001</code>/
-      <code>FBT003</code> are excused because <code>--open/--no-open</code> boolean flags are
-      the Typer API, and <code>PLC0415</code> is excused only in <code>cli.py</code>, only for
-      the two commands that lazily import <code>voyageai</code> so every other command still
-      runs without the <code>vectors</code> extra installed.</div>
+      (<code>typer</code>, <code>rich</code>, <code>neo4j</code>); everything else is
+      gated behind optional extras so Stage 1/2 stay fast to set up: <code>vectors</code>
+      (<code>voyageai</code> — alone drags in langchain-core, tokenizers, huggingface-hub,
+      numpy, and pillow transitively, D014, far more than "one embeddings call" implies),
+      <code>agents</code> (<code>langgraph</code> / <code>anthropic</code>, Stage 4),
+      <code>mcp</code> (Stage 5), <code>observability</code> (<code>opentelemetry-sdk</code>,
+      Stage 6 — genuinely optional, D017: <code>agent.py</code> runs the same without it,
+      just untraced). Also pins <code>[tool.uv.workspace] exclude</code> so a cloned
+      analysis corpus never gets mistaken for a workspace member (D007). Ruff runs in
+      strict mode; the ignore list is annotated per rule rather than blanket-disabled —
+      e.g. <code>FBT001</code>/<code>FBT003</code> are excused because
+      <code>--open/--no-open</code> boolean flags are the Typer API, and
+      <code>PLC0415</code> is excused only in <code>cli.py</code>, only for the commands
+      that lazily import an optional extra so every other command still runs without it.</div>
     </div>
     <div class="file">
       <div class="path">.env.example <span class="dim">→ .env</span></div>
       <div class="desc"><code>NEO4J_URI</code> (AuraDB Free's <code>neo4j+s://</code>
       connection string, D013 — a commented-out local-Docker fallback is included too),
       <code>NEO4J_PASSWORD</code>, <code>VOYAGE_API_KEY</code>, and
-      <code>ANTHROPIC_API_KEY</code> (Stage 4+, unused so far). <code>.env</code> itself is
-      gitignored; <code>cli.py</code> loads it via <code>python-dotenv</code> on startup.</div>
+      <code>ANTHROPIC_API_KEY</code> (Stage 4+ — the LangGraph agent and, via <code>--api-key</code>
+      passthrough, nothing else needs it). <code>.env</code> itself is gitignored;
+      <code>cli.py</code> loads it via <code>python-dotenv</code> on startup.</div>
+    </div>
+    <div class="file">
+      <div class="path">.github/workflows/ci.yml</div>
+      <div class="desc">Stage 6: <code>ruff check</code> + <code>pytest</code> on every
+      push/PR to <code>main</code>, all extras installed so lint/tests cover every stage,
+      not just Stage 1/2. Deliberately does not run <code>labgo baseline</code> or
+      <code>agent-eval</code> against live services — confirmed first that all 46 tests
+      need zero live credentials (grepped the suite for driver/client construction before
+      wiring this up), so a free, fast lint+test gate is the honest scope for CI, not a
+      simulated full eval run that would need secrets and, for the agent, real per-token
+      cost on every push (D017).</div>
     </div>
     <div class="file">
       <div class="path">docker-compose.yml</div>
@@ -803,6 +817,26 @@
       tool calls, resource read) — not just calling the server object's methods directly.</div>
     </div>
     <div class="file">
+      <div class="path">tracing.py</div>
+      <div class="desc">Stage 6: real OpenTelemetry spans, console-exported —
+      <code>SimpleSpanProcessor(ConsoleSpanExporter())</code>, not <code>Batch</code>:
+      labgo's commands are short CLI processes, and a batched processor can still be
+      holding spans when one exits. Chose this over Langfuse specifically to avoid one
+      more account/API key that can be unavailable overnight (D017) — swapping in an OTLP
+      exporter later is one line, not a rewrite. <code>span()</code> is a no-op context
+      manager when <code>opentelemetry-sdk</code> (the <code>observability</code> extra)
+      isn't installed — same optional-dependency shape as <code>voyageai</code> (D014) and
+      <code>mcp</code> (Stage 5); every caller runs identically either way, just untraced.
+      <code>agent.py</code>'s <code>run_agent()</code> wraps the whole invocation in one
+      root <code>agent.run</code> span so every child <code>agent.llm_call</code> /
+      <code>agent.tool_call</code> span nests under it and shares a <code>trace_id</code> —
+      the first version didn't do this, and checking directly showed every span getting
+      its <em>own</em> trace, a pile of spans rather than a trace of one run. LLM spans
+      carry <code>input_tokens</code> / <code>output_tokens</code> / <code>latency_ms</code>;
+      <code>mcp_server.py</code>'s tool spans carry <code>latency_ms</code> only — that
+      model call is the client's, not one this project pays for.</div>
+    </div>
+    <div class="file">
       <div class="path">__init__.py <span class="dim">(×2, empty)</span></div>
       <div class="desc">Package markers for <code>labgo/</code> and <code>labgo/ingest/</code>.
       No content.</div>
@@ -934,6 +968,15 @@
       dispatches to an error payload, not an exception. The tool-calling loop itself was
       exercised directly against Aura, same testing philosophy as
       <code>baseline.predict_impact</code> / <code>hybrid.predict_impact_vector</code>.</div>
+    </div>
+    <div class="file">
+      <div class="path">tests/test_tracing.py</div>
+      <div class="desc">Tests <code>tracing.span()</code>'s contract without
+      special-casing whether <code>opentelemetry-sdk</code> is installed — that would
+      defeat the point of it being optional (D017): usable as a context manager either
+      way, yields something attribute-settable or <code>None</code>, accepts no
+      attributes, and — the one that would actually matter in production —
+      never swallows an exception raised inside the traced block.</div>
     </div>
   </div>
 
@@ -1390,9 +1433,10 @@
     </figcaption>
   </figure>
 
-  <footer>labgo · Change Impact Analyst · Stages 1–5 done (AST graph + git ground truth ·
+  <footer>labgo · Change Impact Analyst · Stages 1–6 done (AST graph + git ground truth ·
   Neo4j deterministic baseline, 22.4% recall floor, 43.3% recall / 15.4% precision matched-
   budget hybrid+cochange, D010/D012/D015 · LangGraph agent measured at 30.3% recall, doesn't
-  beat the baseline yet, D016 · MCP server verified with a real client) — Stage 6,
-  observability + CI eval, is next.</footer>
+  beat the baseline yet, D016 · MCP server verified with a real client · OpenTelemetry
+  traces + CI eval suite, D017). Every stage measured before the next one was built on it —
+  that discipline, not any single number, is the actual deliverable.</footer>
 </div>

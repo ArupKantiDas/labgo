@@ -1,0 +1,38 @@
+name: CI
+
+# Runs the pure-Python eval suite (retrieval-scoring math, parsing, routing logic — see
+# docs/file-map.html's Tests section) on every push and PR. Deliberately does NOT run
+# `labgo baseline`/`agent-eval` against live Neo4j/Voyage/Anthropic: those need real
+# credentials and, for the agent, real per-token cost — not something a CI run on every
+# push should spend. All 46 tests as of Stage 6 need zero live services (confirmed by
+# grep across the test suite before wiring this up), so `pytest` alone is a meaningful,
+# free, fast gate.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies (all extras — lint/test everything, not just Stage 1/2)
+        run: uv sync --extra vectors --extra agents --extra mcp --extra observability --extra dev
+
+      - name: Lint
+        run: uv run ruff check src/ tests/
+
+      - name: Test
+        run: uv run pytest -q

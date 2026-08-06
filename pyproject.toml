@@ -26,6 +26,11 @@ agents = [
 mcp = [
     "mcp>=2.0",  # Stage 5 — mcp.server.mcpserver.MCPServer is a 2.0 API, not 1.x's FastMCP
 ]
+observability = [
+    "opentelemetry-sdk>=1.20",  # Stage 6 — traces.py; console-exported, no external
+    # service required (D011/D013's cost-consciousness). Genuinely optional: agent.py
+    # runs identically without this extra installed, just untraced (see traces.py).
+]
 dev = [
     "pytest>=8.3",
     "ruff>=0.9",

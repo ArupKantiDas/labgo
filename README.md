@@ -36,7 +36,7 @@ choice (see [`DECISIONS.md`](DECISIONS.md)):
 | 3b | Vector-only recall measured + naive hybrid (call-graph ∪ vectors), D015 | ✅ done |
 | 4 | LangGraph agent — **measured, doesn't beat the baseline yet**, D016 | ✅ done |
 | 5 | MCP server — query it from Claude Code | ✅ done |
-| 6 | Observability (traces, cost/latency) + eval suite in CI | next |
+| 6 | Observability (traces, cost/latency) + eval suite in CI | ✅ done |
 
 **Stage 2 is the one that matters.** A deterministic baseline, scored before any LLM is
 added, is what proves the agents earned their place. Skipping it means never being able to
@@ -181,6 +181,29 @@ the LangGraph loop). Verified against a real client over the actual stdio JSON-R
 protocol — handshake, tool listing, tool calls, resource reads — not just calling the
 server object's methods directly.
 
+## Stage 6: observability + CI
+
+```bash
+uv sync --extra observability
+uv run labgo agent "httpx/_client.py" ../labgo-corpora/httpx    # spans print to console
+```
+
+Every `agent.py` LLM call and tool call is wrapped in a real OpenTelemetry span
+(`tracing.py`) — one root `agent.run` span per invocation, with every LLM/tool span
+nested under it sharing a `trace_id`, not a pile of unrelated spans. LLM spans carry
+`input_tokens`/`output_tokens`/`latency_ms`; tool spans carry `latency_ms` per tool, so a
+slow tool is visible separately from an expensive model call. `mcp_server.py`'s tools get
+the same latency spans (no token cost there — that model call is the client's, not
+labgo's). Console-exported by default rather than requiring a Langfuse account (D017) —
+real spans, so pointing at an OTLP endpoint later is additive, not a rewrite. Genuinely
+optional: without the `observability` extra installed, `tracing.span()` is a no-op and
+everything else runs identically, just untraced (same shape as `voyageai`/`mcp`).
+
+`.github/workflows/ci.yml` runs `ruff check` + `pytest` on every push/PR — confirmed first
+that all 46 tests need zero live services, so this is a free, fast, meaningful gate. Does
+**not** run `labgo baseline`/`agent-eval` in CI: those need real credentials and, for the
+agent, real per-token cost on every push — out of scope for what CI should spend (D017).
+
 ## Impact viewer
 
 `labgo view` serves an interactive graph of whatever you just ingested — point it at
@@ -237,7 +260,7 @@ the eval set proves it is the binding constraint is recorded in D004.
 | Orchestration | LangGraph (LangChain used thinly — raw code where chains obscure routing) |
 | Inference | Claude Sonnet 5 + Haiku 4.5 via API |
 | Tooling | MCP server exposing the graph |
-| Observability | Langfuse / OpenTelemetry |
+| Observability | OpenTelemetry, console-exported — see D017 |
 
 Orchestration runs local; the graph, embeddings, and inference all call out to hosted APIs
 (D011 and D013 explain the trade-off — the laptop this runs on is resource-constrained,
@@ -258,10 +281,12 @@ src/labgo/
   hybrid.py     vector-only + hybrid impact prediction, scored the same way (D015)
   agent.py      LangGraph tool-calling agent -- measured, doesn't beat the baseline yet (D016)
   mcp_server.py MCP server (stdio) -- thin wiring around agent.py's tool functions
+  tracing.py    OpenTelemetry spans for agent.py/mcp_server.py -- traces, cost, latency (D017)
   cli.py        ingest / history / benchmark / verify / load / baseline / embed / search /
                 view / agent / agent-eval / mcp
 viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
 docs/file-map.html   file-by-file explainer + data flow diagram
+.github/workflows/ci.yml   ruff + pytest on every push/PR -- no live services needed (D017)
 docker-compose.yml   local Neo4j, community edition
 DECISIONS.md    append-only decision log
 ```

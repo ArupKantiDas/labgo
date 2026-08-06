@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Annotated, Any, TypedDict
 import anthropic
 from langgraph.graph import END, StateGraph
 
+from labgo import tracing
 from labgo.baseline import predict_impact_calls
 
 if TYPE_CHECKING:
@@ -256,9 +257,14 @@ def _final_text(state: AgentState) -> str:
 
 
 def _agent_node(state: AgentState, *, client: anthropic.Anthropic, model: str, system: str) -> dict:
-    resp = client.messages.create(
-        model=model, max_tokens=1024, system=system, tools=TOOLS, messages=state["messages"]
-    )
+    with tracing.span("agent.llm_call", model=model, turn=state["turns"]) as s:
+        resp = client.messages.create(
+            model=model, max_tokens=1024, system=system, tools=TOOLS, messages=state["messages"]
+        )
+        if s:
+            s.set_attribute("input_tokens", resp.usage.input_tokens)
+            s.set_attribute("output_tokens", resp.usage.output_tokens)
+            s.set_attribute("stop_reason", resp.stop_reason)
     msg = {"role": "assistant", "content": [b.model_dump() for b in resp.content]}
     return {
         "messages": [msg],
@@ -278,7 +284,13 @@ def _finalize_node(
         "content": "No more tool calls are available. Respond now in the required format.",
     }
     messages = [*state["messages"], nudge]
-    resp = client.messages.create(model=model, max_tokens=1024, system=system, messages=messages)
+    with tracing.span("agent.llm_call", model=model, turn=state["turns"], forced=True) as s:
+        resp = client.messages.create(
+            model=model, max_tokens=1024, system=system, messages=messages
+        )
+        if s:
+            s.set_attribute("input_tokens", resp.usage.input_tokens)
+            s.set_attribute("output_tokens", resp.usage.output_tokens)
     msg = {"role": "assistant", "content": [b.model_dump() for b in resp.content]}
     return {
         "messages": [nudge, msg],
@@ -295,11 +307,12 @@ def _tool_node(state: AgentState, *, driver: Driver, repo: Path) -> dict:
     called = []
     for tu in tool_uses:
         called.append(tu["name"])
-        try:
-            output = _dispatch_tool(driver, repo, tu["name"], tu.get("input", {}))
-        except Exception as exc:  # noqa: BLE001  -- tool errors go back to the model as text,
-            #  not raised: a bad Cypher arg from the model shouldn't crash the whole run.
-            output = json.dumps({"error": str(exc)})
+        with tracing.span("agent.tool_call", tool=tu["name"]):
+            try:
+                output = _dispatch_tool(driver, repo, tu["name"], tu.get("input", {}))
+            except Exception as exc:  # noqa: BLE001  -- tool errors go back to the model as
+                #  text, not raised: a bad Cypher arg from the model shouldn't crash the run.
+                output = json.dumps({"error": str(exc)})
         results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": output})
     return {
         "messages": [{"role": "user", "content": results}],
@@ -386,38 +399,51 @@ def run_agent(  # noqa: PLR0913  (driver/repo/seed/model/max_turns/api_key are e
     max_turns: int = MAX_TURNS,
     api_key: str | None = None,
 ) -> AgentResult:
-    """Run the agent loop for one seed file and return its scored, costed result."""
-    client = anthropic.Anthropic(api_key=api_key)
-    known = _known_files(driver)
-    system = SYSTEM_PROMPT_TEMPLATE.format(file_list="\n".join(known), max_turns=max_turns)
-    graph = build_graph(driver, repo, client=client, model=model, system=system)
+    """Run the agent loop for one seed file and return its scored, costed result.
 
-    initial: AgentState = {
-        "messages": [{"role": "user", "content": f"File about to change: {seed}"}],
-        "turns": 0,
-        "max_turns": max_turns,
-        "stop_reason": None,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "tool_calls": [],
-    }
-    final_state = graph.invoke(initial, config={"recursion_limit": max_turns * 4 + 10})
+    Wrapped in one root `agent.run` span so every `agent.llm_call`/`agent.tool_call` span
+    the loop emits nests under it as a child, sharing one `trace_id` — without this, each
+    node's `tracing.span()` call would start its own independent trace, and "trace" would
+    describe a pile of unrelated spans rather than one agent invocation.
+    """
+    with tracing.span("agent.run", seed=seed, model=model, max_turns=max_turns) as run_span:
+        client = anthropic.Anthropic(api_key=api_key)
+        known = _known_files(driver)
+        system = SYSTEM_PROMPT_TEMPLATE.format(file_list="\n".join(known), max_turns=max_turns)
+        graph = build_graph(driver, repo, client=client, model=model, system=system)
 
-    report = _final_text(final_state)
-    predicted, unrecognized = parse_impacted_files(report, set(known))
-    predicted.discard(seed)
-    tests_match = TESTS_RE.search(report)
-    reviewer_match = REVIEWER_RE.search(report)
+        initial: AgentState = {
+            "messages": [{"role": "user", "content": f"File about to change: {seed}"}],
+            "turns": 0,
+            "max_turns": max_turns,
+            "stop_reason": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "tool_calls": [],
+        }
+        final_state = graph.invoke(initial, config={"recursion_limit": max_turns * 4 + 10})
 
-    return AgentResult(
-        seed=seed,
-        predicted_files=predicted,
-        unrecognized_mentions=unrecognized,
-        tests_to_run=tests_match.group(1).strip() if tests_match else "",
-        likely_reviewer=reviewer_match.group(1).strip() if reviewer_match else "",
-        report=report,
-        turns=final_state["turns"],
-        tool_calls=final_state["tool_calls"],
-        input_tokens=final_state["input_tokens"],
-        output_tokens=final_state["output_tokens"],
-    )
+        report = _final_text(final_state)
+        predicted, unrecognized = parse_impacted_files(report, set(known))
+        predicted.discard(seed)
+        tests_match = TESTS_RE.search(report)
+        reviewer_match = REVIEWER_RE.search(report)
+
+        if run_span:
+            run_span.set_attribute("turns", final_state["turns"])
+            run_span.set_attribute("input_tokens", final_state["input_tokens"])
+            run_span.set_attribute("output_tokens", final_state["output_tokens"])
+            run_span.set_attribute("predicted_files", len(predicted))
+
+        return AgentResult(
+            seed=seed,
+            predicted_files=predicted,
+            unrecognized_mentions=unrecognized,
+            tests_to_run=tests_match.group(1).strip() if tests_match else "",
+            likely_reviewer=reviewer_match.group(1).strip() if reviewer_match else "",
+            report=report,
+            turns=final_state["turns"],
+            tool_calls=final_state["tool_calls"],
+            input_tokens=final_state["input_tokens"],
+            output_tokens=final_state["output_tokens"],
+        )

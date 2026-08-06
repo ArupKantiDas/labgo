@@ -672,6 +672,58 @@ this" — those are different claims, and only the first one has evidence behind
 
 ---
 
+## D017 — Stage 6: console-exported OpenTelemetry over Langfuse; CI runs the free half of the eval suite
+**Date:** 2026-08-06 · **Status:** accepted
+
+Stage 6 is two things README's Stack table already named: observability (traces,
+cost/latency) and an eval suite in CI. Both landed with a cost-conscious choice each,
+same posture as D011/D013.
+
+**Observability: OpenTelemetry, console-exported, not Langfuse.** The Stack table listed
+"Langfuse / OpenTelemetry" as either-or. Langfuse needs an account and an API key — one
+more credential that can be unavailable at 2am, the exact failure mode this project has
+already hit twice (D011, D013: laptop-resource and cost reasons pushed Voyage and Neo4j
+to hosted services, but *adding a service* is a cost D011/D013 accepted only because there
+was no free-and-local alternative that taught the same thing; here there is). `tracing.py`
+uses real OpenTelemetry spans (`SimpleSpanProcessor(ConsoleSpanExporter())` — `Simple`, not
+`Batch`: labgo's commands are short CLI processes, and a batched processor can still be
+holding spans when the process exits) — genuinely swappable for an OTLP exporter later
+(`_provider.add_span_processor(...)` is one line), not a rewrite, but nothing beyond stdout
+is wired up now because nothing has asked for it yet.
+
+**Traces, not just spans.** The first version of this wrapped each `agent.py` LLM/tool call
+in its own `start_as_current_span()` independently, which — checked directly — gave every
+span its *own* `trace_id`: a pile of unrelated spans, not a trace of one agent run. Fixed
+by wrapping the whole `run_agent()` call in one root `agent.run` span, so every child span
+nests under it and shares a `trace_id`. Verified against a live run: all spans in one
+`labgo agent` invocation now share one `trace_id`, with correct `parent_id` chaining.
+
+**Cost/latency, not cost-only.** Every `agent.llm_call` span carries `input_tokens`,
+`output_tokens`, and `latency_ms`; every `agent.tool_call` span carries `latency_ms` per
+tool, so a slow tool is visible in the trace, not just an expensive model call.
+`mcp_server.py`'s tool wrappers get the same `mcp.tool_call` spans, latency only — the
+model calling them there is the *client's*, not one this project pays for, so there are no
+tokens of labgo's own to report.
+
+**Genuinely optional, same shape as every other extra.** `opentelemetry-sdk` is a new
+`observability` extra, not a core dependency. `tracing.span()` is a no-op context manager
+when the SDK isn't installed (checked via `try`/`except ImportError` at module load, the
+same pattern `voyageai` (D014) and `mcp` (Stage 5) already use) — `agent.py` and
+`mcp_server.py` run identically either way, they just don't get traced.
+
+**CI runs the free half of the eval suite, not the paid half.** `.github/workflows/ci.yml`
+runs `ruff check` + `pytest` on every push/PR — confirmed first that all 42 (now 46) tests
+need zero live services (grepped the suite for `connect(`/`GraphDatabase`/
+`anthropic.Anthropic(`/`voyageai.Client(` before wiring this up; the one hit,
+`test_graph.py`'s `connect()` call, is inside a test that unsets `NEO4J_PASSWORD` and
+asserts `connect()` raises *before* ever touching the network). Deliberately does **not**
+run `labgo baseline`/`agent-eval` in CI: those need real Neo4j/Voyage/Anthropic credentials
+that shouldn't live in a public repo's CI secrets for a personal project, and `agent-eval`
+specifically costs real per-token money on every push — a free, fast lint+test gate is the
+honest scope for CI here, not a simulated full eval run.
+
+---
+
 ## Template
 
 ```

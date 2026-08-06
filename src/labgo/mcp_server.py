@@ -13,6 +13,10 @@ or anything else that speaks the protocol. Same tools, opposite direction of con
 Connects to Neo4j once at process startup (`labgo mcp <repo>` keeps a driver open for the
 life of the process) rather than per-call like the CLI's other commands — an MCP server
 is a long-lived process talking to its client over stdio, not a one-shot invocation.
+
+Each tool call is wrapped in `tracing.span()` (Stage 6) — latency only, not cost: the
+calling model here is the *client's*, not one this project pays for, so there are no
+tokens of labgo's own to report the way `agent.py`'s spans do.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from typing import TYPE_CHECKING
 
 from mcp.server.mcpserver import MCPServer
 
+from labgo import tracing
 from labgo.agent import (
     tool_call_graph,
     tool_co_change,
@@ -52,27 +57,32 @@ def build_server(driver: Driver, repo: Path) -> MCPServer:
     @server.tool()
     def call_graph_traverse(file: str, hops: int = 2) -> str:
         """Files reachable via the static CALLS graph within `hops` of a seed file."""
-        return tool_call_graph(driver, {"file": file, "hops": hops})
+        with tracing.span("mcp.tool_call", tool="call_graph_traverse"):
+            return tool_call_graph(driver, {"file": file, "hops": hops})
 
     @server.tool()
     def co_change_neighbors(file: str, min_count: int = 2) -> str:
         """Files that historically changed together with this file in git history."""
-        return tool_co_change(driver, {"file": file, "min_count": min_count})
+        with tracing.span("mcp.tool_call", tool="co_change_neighbors"):
+            return tool_co_change(driver, {"file": file, "min_count": min_count})
 
     @server.tool()
     def semantic_search(query: str, k: int = 8) -> str:
         """Search embedded function/class source by meaning, not by dependency."""
-        return tool_semantic_search(driver, {"query": query, "k": k})
+        with tracing.span("mcp.tool_call", tool="semantic_search"):
+            return tool_semantic_search(driver, {"query": query, "k": k})
 
     @server.tool()
     def test_coverage(file: str) -> str:
         """Test functions that exercise functions defined in this file."""
-        return tool_test_coverage(driver, {"file": file})
+        with tracing.span("mcp.tool_call", tool="test_coverage"):
+            return tool_test_coverage(driver, {"file": file})
 
     @server.tool()
     def likely_reviewer(file: str) -> str:
         """Most frequent historical committers to this file — a review-routing heuristic."""
-        return tool_likely_reviewer(repo, {"file": file})
+        with tracing.span("mcp.tool_call", tool="likely_reviewer"):
+            return tool_likely_reviewer(repo, {"file": file})
 
     @server.resource("labgo://files")
     def known_files() -> str:
