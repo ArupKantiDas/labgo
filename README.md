@@ -51,9 +51,14 @@ measurement had). But the fix barely moved the number, and the reason turned out
 matter more than the leak: the leak-free combined predictor's mean prediction size is
 **40.5 of ~60 files per case** — two-thirds of the repository. A predictor that returns
 most of the codebase scores well on recall regardless of whether it found anything
-specific, the same failure mode D015 caught for an early vector measurement. 92.1% is
-not yet a fair number to cite either — see D012 for the full breakdown and D010 for the
-matched-budget sweep this motivates.
+specific, the same failure mode D015 caught for an early vector measurement.
+
+D010's sweep answers this directly: `min_count` (not `evidence_max_files`, the parameter
+D010 originally suspected) is the lever that controls prediction budget. At
+`--min-count 25` — matched to the call-graph baseline's own ~4.8-file budget — the
+combined signal reaches **26.9% recall / 15.7% precision**, beating the 22.4% / 12.2%
+floor on *both* axes, a fair result nobody can call inflated. See D010/D012 for the full
+sweep.
 
 ## Quickstart
 
@@ -80,7 +85,8 @@ uv run labgo load --clear          # data/graph.json (+cochange.json) -> Neo4j
 
 uv run labgo benchmark ../labgo-corpora/httpx --name httpx     # pin the exam (D008)
 uv run labgo baseline benchmarks/httpx --hops 2 --no-cochange  # the honest floor (D012)
-uv run labgo baseline benchmarks/httpx --hops 2 --cochange     # leave-one-out combined (D012)
+uv run labgo baseline benchmarks/httpx --hops 2 --cochange \
+  --min-count 25                                               # matched-budget combined (D010)
 ```
 
 No local database needed — the default target is a Neo4j AuraDB Free instance (D013).
@@ -152,8 +158,10 @@ Resolution  27.2% of 2,845 in-scope call sites
             4 exact · 99 self/cls · 327 local · 343 heuristic · 2,072 unresolved
 History     1,482 commits scanned -> 610 eval cases · 1,745 co-change edges
 Baseline    22.4% mean recall · 28.8% hit rate (call-graph only, 236-case benchmark, D012)
-            calls+cochange (leave-one-out) 92.1% recall · 5.9% precision · predicts
-            40.5/~60 files/case — not yet a fair number, see D012
+            calls+cochange, min_count=2 (default): 92.1% recall · 5.9% precision · predicts
+            40.5/~60 files/case — not a fair number, predicts most of the corpus (D012)
+            calls+cochange, min_count=25 (matched ~5-file budget): 26.9% recall ·
+            15.7% precision — beats the floor on both axes (D010)
 Vectors     1,229 Function/Class nodes embedded (voyage-code-3) · 162,884 tokens billed
 Retrieval   calls 22.4% · vectors 19.3% (matched ~4-file budget) · hybrid 40.1% (D015)
 ```

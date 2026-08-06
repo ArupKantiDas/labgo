@@ -212,7 +212,8 @@ knowing which you have.
 ---
 
 ## D010 — `max_files` was a guess; the data says it is too generous
-**Date:** 2026-08-04 · **Status:** open — sweep required
+**Date:** 2026-08-04 · **Status:** resolved (2026-08-06) — sweep run, but the answer is
+not the one the question assumed. See "Resolved" below.
 
 Commit size punishes geometrically: N files produce N(N−1)/2 pairs. 5 files → 10 pairs,
 20 → 190, 47 → 1,081. Without a cap, the largest and least meaningful commits dominate.
@@ -241,7 +242,64 @@ commits contribute co-change evidence *and* which become exam questions. These w
 different values — the exam wants focused commits for clean labels; the evidence tolerates
 more noise because `min_count=2` filters downstream. Coupling them also means tuning the
 threshold silently tunes the exam to match the evidence, which is a mild form of leakage.
-**Split into two parameters.**
+**Split into two parameters.** *(Done separately, ahead of this sweep — `evidence_max_files`
+/ `eval_max_files` already exist in `gitlog.extract_history` and the `history`/`benchmark`
+CLI commands.)*
+
+**Resolved.** Ran the sweep this entry called for — but D012's leave-one-out fix (done
+first, since scoring `CO_CHANGED` at all needed it to be honest) had already surfaced the
+real target: the leak-free combined predictor was returning 40.5 of ~60 files per case,
+regardless of `evidence_max_files`. That's a *budget* problem, and `min_count` — not
+`max_files` — turned out to be the lever that controls it.
+
+**min_count sweep (evidence_max_files=20, hops=2, leave-one-out, 236 cases):**
+
+| min_count | recall | precision | mean predicted size |
+|---|---|---|---|
+| 2 (shipped default) | 92.1% | 5.9% | 40.5 |
+| 5 | 74.3% | 11.4% | 21.9 |
+| 10 | 56.7% | 20.2% | 11.1 |
+| 20 | 32.6% | 19.6% | 6.0 |
+| **24–30 (plateau)** | **26.9%** | **15.7%** | **5.1** |
+
+The curve plateaus at `min_count≈24` and stays flat through 35 — httpx simply has no
+pairs left above that count to keep filtering (max observed count is 39, D012). **This is
+the matched-budget point**: call-graph alone predicts 4.82 files/case (measured directly,
+not the 1.6 an earlier draft of this sweep mistakenly reported by averaging over unique
+seeds instead of per-case — same weighting bug the recall/precision means everywhere else
+in this project deliberately avoid). At `min_count≈24–30`, combined recall (26.9%) and
+precision (15.7%) both beat call-graph-alone (22.4% / 12.2%) — a real, fair win, the same
+matched-budget standard D015 already established for vectors.
+
+**Then checked whether `evidence_max_files` still matters, now that `min_count` is doing
+the real filtering.** Crossed both parameters:
+
+| evidence_max_files | min_count=20 | min_count=24 | min_count=30 |
+|---|---|---|---|
+| 10 | 26.9% / 15.5% / 5.1 | 26.9% / 15.7% / 5.1 | 22.4% / 12.2% / 4.8 |
+| 15 | 28.9% / 15.5% / 5.7 | 26.9% / 15.7% / 5.1 | 26.9% / 15.7% / 5.1 |
+| 20 | 32.6% / 19.6% / 6.0 | 26.9% / 15.7% / 5.1 | 26.9% / 15.7% / 5.1 |
+| 30 | 34.0% / 17.7% / 6.5 | 28.9% / 16.3% / 5.3 | 26.9% / 15.7% / 5.1 |
+
+(recall / precision / mean size). **Once `min_count` is tuned to a matched budget, the
+four `evidence_max_files` values converge to nearly the same result.** `evidence_max_files`
+only moves the number when `min_count` is left loose — exactly the regime this project
+should not be citing a number from anyway (D012). The original hypothesis ("`max_files=20`
+is too generous, tighten it") named the wrong knob: the fix isn't a smaller
+`evidence_max_files`, it's a `min_count` chosen for the budget being compared at.
+
+**Consequence:**
+- **Not changing `evidence_max_files`'s default (20)** — the sweep shows it barely matters
+  once scoring is done properly, so there's no evidence-backed reason to move it.
+- **Not changing `min_count`'s default (2)** either — 2 remains the right default for
+  `co_change_edges()`'s original purpose, the impact *viewer* (D001's "show a human what's
+  coupled," not a fixed prediction budget to score against). Silently raising it there
+  would hide real coupling from a person for the sake of a metric they're not computing.
+- **The citable matched-budget combined number is now `--min-count 24` or higher** (25
+  used going forward as a round, plateau-safe choice): 26.9% recall / 15.7% precision at
+  hops=2, leave-one-out — beats the 22.4% / 12.2% call-graph floor on both axes, and unlike
+  the `min_count=2` number (92.1% / 5.9%), this one is comparing at a budget nobody can
+  dispute is fair.
 
 ---
 
