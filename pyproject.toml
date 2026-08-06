@@ -8,6 +8,14 @@ dependencies = [
     "rich>=13.9",
     "python-dotenv>=1.0",
     "neo4j>=5.27",
+    # Multi-language ingestion (D018). Pinned to the language-pack 0.x line on purpose:
+    # 0.13 bundles every grammar precompiled in the wheel (~17-33 MB — the cost of
+    # plug-and-play with no network at runtime), while the 1.x line downloads grammars
+    # on first use, which breaks offline first-runs and adds CI flake. tsast.py degrades
+    # to file-level ingestion if either import fails, so this is a default, not a hard
+    # requirement. Revisit trigger: a py-tree-sitter release the 0.x pack can't load.
+    "tree-sitter>=0.25,<0.27",
+    "tree-sitter-language-pack>=0.13,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -98,6 +106,14 @@ ignore = [
                 # purpose: it's an optional (`vectors`) extra, and every other command
                 # must keep working without it installed (see pyproject's optional-deps
                 # comment). A top-level import would make it a hard dependency of the CLI.
+]
+"src/labgo/ingest/tsast.py" = [
+    "C901",     # too-complex            ─┐ The resolution ladder is deliberately one flat
+    "PLR0911",  # too-many-returns        │ sequence of early returns (one rung per
+    "PLR0912",  # too-many-branches       │ confidence tier) and import collection is one
+    "PLR0913",  # too-many-arguments      │ branch per import style. Splitting either into
+    "PLR0917",  # too-many-positional    ─┘ forwarding helpers would hide the ladder shape
+                # that D004 makes central — pyast._resolve_one keeps the same structure.
 ]
 "tests/*" = [
     "S101",     # assert is the point of a test

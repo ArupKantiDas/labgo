@@ -724,6 +724,100 @@ honest scope for CI here, not a simulated full eval run.
 
 ---
 
+## D018 — Multi-language ingestion: a registry, tree-sitter for ten languages, file-level fallback for the rest
+**Date:** 2026-08-06 · **Status:** accepted
+
+**Context:** the project was Python-only in exactly two places — `pyast.py` (the extractor)
+and `gitlog.py`'s `SOURCE_SUFFIXES = {".py"}` — while everything downstream of `graph.json`
+(Neo4j loader, baseline, embeddings, viewer, agent, MCP) was already language-agnostic.
+Making the repo plug-and-play with any language is therefore an ingestion problem, not a
+rewrite.
+
+**Chosen:** three tiers behind one dispatcher (`ingest/extract.py`), described by one
+registry (`ingest/languages.py`) that is the single source of truth for extensions,
+grammar keys, test conventions, vendored dirs, and lockfile names:
+
+1. **Python → `pyast.py`, byte-for-byte untouched.** Its 27.2% resolution number is
+   measured and recorded; the dispatcher folds its output in post-hoc (a
+   `dataclasses.replace` to stamp `language="python"`), so the httpx baseline stays
+   exactly reproducible.
+2. **JS/TS/TSX/Go/Java/Rust/C/C++/Ruby/C#/PHP → `tsast.py`** (tree-sitter): one generic
+   engine, one declarative `TSSpec` per language (three queries + small tables). The
+   D004 resolution ladder generalizes: SELF (this/self/`$this`/Go receiver var/implicit
+   this) → EXACT (import resolved to a repo file) → LOCAL (same file; Go adds same
+   package) → HEURISTIC (unique name **within the language**), unresolved counted.
+   External classification stays D005-conservative: repo-defined names are never
+   external, unknown receivers stay in the denominator.
+3. **Any other recognized extension → file-level fallback**: a File node with
+   language/loc/is_test and nothing else. Not a stub — co-change evidence is
+   language-agnostic and D010/D012 showed it carries most of the retrieval signal, so
+   impact mode, the eval set, and the viewer all work for *any* language.
+
+**Alternatives considered:** tree-sitter for Python too (rejected: discards the measured
+narrative for zero measured gain); file-level only for non-Python (rejected by scope
+decision — call graphs for the top languages are the point); per-language AST libraries
+(rejected: ten dependencies and ten APIs where tree-sitter is one of each).
+
+**Dependency pin, deliberate:** `tree-sitter-language-pack >=0.13,<1.0` + `tree-sitter
+>=0.25,<0.27`. The 0.x pack bundles every grammar precompiled in the wheel (~17–33 MB);
+the 1.x line downloads grammars on first use — which breaks offline first-runs and adds
+CI flake, the opposite of plug-and-play. Degradation is graded regardless: missing
+package → file-level everywhere; one grammar/query failing to compile → that language
+only; one file failing → counted, skipped.
+
+**Honesty mechanism:** `ExtractionStats.per_language` carries every counter per language.
+External-call classification quality varies (Go/JS/TS strong, C/PHP builtins-only), so a
+weakly-classified language shows a visibly depressed rate of its own instead of silently
+polluting the global number — the D005 lesson, structurally enforced. Known per-language
+gaps are named, not hidden: TS `tsconfig` paths/baseUrl, Rust `use crate::` and
+`#[cfg(test)]`, PHP PSR-4, C# namespace→file (C# gets no EXACT tier), Ruby bare
+paren-less calls (grammatically indistinguishable from variable reads — invisible, not
+"unresolved").
+
+**Consequence for benchmarks:** `SOURCE_SUFFIXES` widening changes what `history` counts
+as source, so the *first regeneration* of any benchmark after this change is a new exam
+(the committed `benchmarks/httpx` is pinned and unaffected). Every manifest now records
+`source_suffixes` so the filter that built an exam is provenance, not folklore.
+
+**Revisit when:** a py-tree-sitter release the 0.x pack cannot load (move to 1.x +
+`prefetch()`), or a measured corpus shows a named descope (e.g. tsconfig paths) is the
+binding constraint on EXACT-tier recall.
+
+---
+
+## D019 — Plug-and-play surface: `labgo analyze` + `labgo doctor`, core stays zero-credential
+**Date:** 2026-08-06 · **Status:** accepted
+
+**Context:** the quickstart required knowing D007 (clone corpora *outside* the tree),
+running three commands in order, and understanding which stages need which credentials.
+"Download and done" needs one command and one diagnostic.
+
+**Chosen:**
+- **`labgo analyze <path-or-url>`** — the one command: a git URL is cloned
+  (`--filter=blob:none`, full history for `labgo history`) to `~/.labgo/corpora/<name>`,
+  which satisfies D007's outside-the-tree requirement automatically; a local path is used
+  as-is. Runs ingest + history (skipped with a message when the target isn't a git repo),
+  prints the language census, then serves the viewer. Zero credentials, zero config.
+- **`labgo doctor`** — a per-stage readiness table (core / neo4j / vectors / agent /
+  extras) where every failing row prints the exact fix (`uv sync --extra …`, the `.env`
+  line, the npm build). `--probe` adds a live Neo4j connectivity check. It is a report,
+  not a gate: always exits 0, and says explicitly that nothing in it blocks `analyze`.
+
+**Alternatives considered:** auto-starting local Neo4j via Docker from `labgo load`
+(rejected by scope decision: guided setup over hidden orchestration — a command that
+silently starts containers is the opposite of legible); corpora as a CLI-managed cache
+with eviction (rejected: a directory the user can `rm -rf` is simpler than cache
+bookkeeping).
+
+**Consequence:** the README quickstart is now one command against any repo, and the
+cloud stages remain exactly as opt-in as D013/D014 designed them — `doctor` replaces
+tribal knowledge about what each one needs.
+
+**Revisit when:** corpora under `~/.labgo` need pinning/verification semantics beyond
+what `labgo benchmark`'s manifest already provides.
+
+---
+
 ## Template
 
 ```

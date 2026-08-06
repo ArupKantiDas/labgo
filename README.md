@@ -7,6 +7,17 @@ A knowledge graph of a real repository (files, functions, call edges, imports, t
 coverage, git co-change, ownership) plus semantic search over function/class source code,
 queried by a multi-agent workflow — and scored against ground truth mined from git history.
 
+**Works on any repo, in any language.** One command, no database, no API keys:
+
+```bash
+git clone <this repo> && cd LabGo && uv sync
+uv run labgo analyze https://github.com/your/repo     # or a local path
+```
+
+That clones the target (to `~/.labgo/corpora/`), builds the code graph and git co-change
+history, and opens the interactive impact viewer. Run `uv run labgo doctor` to see what
+the optional cloud stages (Neo4j baseline, embeddings, agent) still need.
+
 > **New here? Read [`WHY.md`](WHY.md) first.** It explains the problem, the idea, and the
 > reasoning in plain English, with no code. This README assumes you already have.
 >
@@ -64,18 +75,45 @@ sweep.
 
 ```bash
 uv sync
-
-# Analysis corpora live OUTSIDE this tree — uv would otherwise treat a cloned
-# repo's pyproject.toml as a workspace member (see D007).
-mkdir -p ../labgo-corpora
-git clone --filter=blob:none https://github.com/encode/httpx.git ../labgo-corpora/httpx
-
-uv run labgo ingest  ../labgo-corpora/httpx   # -> data/graph.json
-uv run labgo history ../labgo-corpora/httpx   # -> data/cochange.json, data/evalset.json
-uv run labgo view                             # -> http://127.0.0.1:4173
+uv run labgo analyze https://github.com/encode/httpx.git   # any repo, any language
 ```
 
-None of the three needs a database, an API key, or a network call.
+`analyze` is `ingest` + `history` + `view` in one step, and clones URLs to
+`~/.labgo/corpora/` (outside this tree — see D007 for why that matters). The three
+underlying commands still exist for running the steps separately:
+
+```bash
+uv run labgo ingest  <repo>    # -> data/graph.json
+uv run labgo history <repo>    # -> data/cochange.json, data/evalset.json
+uv run labgo view              # -> http://127.0.0.1:4173
+```
+
+None of this needs a database, an API key, or configuration.
+
+## Language support (D018)
+
+| Tier | Languages | What you get |
+|---|---|---|
+| Python AST | Python | the original measured extractor (`pyast.py`), untouched |
+| Tree-sitter | JS, TS/TSX, Go, Java, Rust, C, C++, Ruby, C#, PHP | functions/classes, CALLS with confidence tiers, IMPORTS, TESTS |
+| File-level | ~20 more (Kotlin, Swift, Scala, Elixir, Lua, Vue, ...) | File nodes + git co-change, eval set, viewer, impact mode |
+
+The third tier is not a consolation prize: co-change evidence is language-agnostic and
+carries most of the retrieval signal on its own (D010/D012). Per-language resolution
+rates are reported separately (`ExtractionStats.per_language`), because external-call
+classification quality varies by language — a weak language shows its own depressed
+number instead of silently polluting the global one (the D005 lesson, applied per
+language). Known gaps are named in D018, not hidden.
+
+## Doctor
+
+```bash
+uv run labgo doctor            # per-stage readiness: core / neo4j / vectors / agent
+uv run labgo doctor --probe    # also test the Neo4j connection live
+```
+
+Every failing row prints the exact fix. Nothing in it blocks `labgo analyze` — the core
+runs with zero credentials.
 
 ## Stage 2: Neo4j baseline
 
@@ -257,6 +295,7 @@ the eval set proves it is the binding constraint is recorded in D004.
 
 | | |
 |---|---|
+| Parsing | Python stdlib AST + tree-sitter (10 languages, grammars bundled) — see D018 |
 | Graph | Neo4j (AuraDB Free, cloud) — see D013 |
 | Vectors | Voyage `voyage-code-3` (cloud API, code-specialized) — see D011 |
 | Orchestration | LangGraph (LangChain used thinly — raw code where chains obscure routing) |
@@ -274,8 +313,11 @@ so running Neo4j or an embedding model locally isn't free the way it looks on pa
 src/labgo/
   ingest/
     models.py   graph schema (nodes, edges, confidence tiers, metrics)
-    pyast.py    Python AST -> call/import graph
-    gitlog.py   git history -> co-change edges + eval set
+    languages.py  the language registry -- extensions, grammars, test conventions (D018)
+    extract.py  dispatch: routes each file to pyast / tsast / file-level fallback
+    pyast.py    Python AST -> call/import graph (the measured path, untouched)
+    tsast.py    tree-sitter -> call/import graph for 10 more languages (D018)
+    gitlog.py   git history -> co-change edges + eval set (registry-driven suffixes)
   benchmark.py  pinned, reproducible benchmarks (D008)
   graph.py      Neo4j loader (connect / read_graph_json / load_graph)
   baseline.py   deterministic Cypher impact prediction + scoring (no LLM)
@@ -284,8 +326,8 @@ src/labgo/
   agent.py      LangGraph tool-calling agent -- measured, doesn't beat the baseline yet (D016)
   mcp_server.py MCP server (stdio) -- thin wiring around agent.py's tool functions
   tracing.py    OpenTelemetry spans for agent.py/mcp_server.py -- traces, cost, latency (D017)
-  cli.py        ingest / history / benchmark / verify / load / baseline / embed / search /
-                view / agent / agent-eval / mcp
+  cli.py        analyze / doctor / ingest / history / benchmark / verify / load /
+                baseline / embed / search / view / agent / agent-eval / mcp
 viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
 docs/file-map.html   file-by-file explainer + data flow diagram
 .github/workflows/ci.yml   ruff + pytest on every push/PR -- no live services needed (D017)

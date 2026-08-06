@@ -57,13 +57,13 @@ TOOLS = [
         "description": (
             "Files reachable via the static CALLS graph within `hops` of a seed file. "
             "Structural — mined from source, not git history. The most reliable signal, "
-            "but only 27.2% of calls resolve statically on httpx (D004), so it misses "
-            "dynamic-dispatch coupling."
+            "but static resolution is inherently incomplete (only 27.2% of calls resolved "
+            "on the reference corpus, D004), so it misses dynamic-dispatch coupling."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "file": {"type": "string", "description": "File id, e.g. 'httpx/_client.py'"},
+                "file": {"type": "string", "description": "A file id from the corpus file list"},
                 "hops": {"type": "integer", "description": "Traversal depth, 1-3", "default": 2},
             },
             "required": ["file"],
@@ -75,7 +75,8 @@ TOOLS = [
             "Files that historically changed together with this file in git history. "
             "Catches real coupling the call graph misses (renames, config, dynamic "
             "dispatch) but is noisy — raise min_count for a stronger, cleaner signal "
-            "(D010 found min_count~25 matches this project's call-graph budget)."
+            "(on the reference corpus, D010 found min_count~25 matches the call-graph "
+            "baseline's own prediction budget)."
         ),
         "input_schema": {
             "type": "object",
@@ -134,8 +135,8 @@ break, which tests should run, and who should review the change.
 Files in this corpus (use these exact ids, nothing else):
 {file_list}
 
-Guidance on the tools, from what this project has already measured (cite the numbers if \
-relevant to your reasoning):
+Guidance on the tools, from what this project measured on its reference corpus — \
+calibration context, not facts about the current corpus:
 - call_graph_traverse is structural and precise but incomplete (D004).
 - co_change_neighbors at a low min_count predicts most of the corpus (D012) — use a \
   higher min_count (~20-30) if you want a clean signal, a low one only to cast a wide net.

@@ -31,7 +31,8 @@ def connect(uri: str | None = None, user: str | None = None, password: str | Non
     if not password:
         raise RuntimeError(
             "NEO4J_PASSWORD not set. Copy .env.example to .env and fill it in, or pass "
-            "--password. It must match docker-compose.yml's NEO4J_AUTH."
+            "--password. It must match docker-compose.yml's NEO4J_AUTH. "
+            "Run `labgo doctor` to see what each stage still needs."
         )
     return GraphDatabase.driver(uri, auth=(user, password))
 

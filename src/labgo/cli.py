@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
+import shutil
+import subprocess
 import threading
 import webbrowser
 from pathlib import Path
@@ -26,9 +29,9 @@ from labgo.benchmark import (
 )
 from labgo.graph import clear_database, connect, load_graph, read_graph_json
 from labgo.hybrid import score_hybrid_baseline, score_vector_baseline
-from labgo.ingest.gitlog import co_change_edges, extract_history
+from labgo.ingest.extract import extract_repo
+from labgo.ingest.gitlog import SOURCE_SUFFIXES, co_change_edges, extract_history
 from labgo.ingest.models import EdgeKind, NodeKind
-from labgo.ingest.pyast import extract_repo
 
 load_dotenv()  # NEO4J_*, VOYAGE_API_KEY, etc. — see .env.example
 
@@ -44,12 +47,33 @@ def _write(path: Path, payload: object) -> None:
 
 @app.command()
 def ingest(
-    repo: Path = typer.Argument(..., help="Path to a Python repo to analyse"),
+    repo: Path = typer.Argument(..., help="Path to a repo to analyse (any language, D018)"),
     out: Path = typer.Option(Path("data"), "--out", "-o", help="Output directory"),
 ) -> None:
     """Parse a repo into a code graph. No database required."""
     graph = extract_repo(repo)
     s = graph.stats
+
+    if len(s.per_language) > 1 or s.files_fallback:
+        lt = Table(title="Languages", title_style="bold")
+        lt.add_column("language")
+        lt.add_column("files", justify="right")
+        lt.add_column("functions", justify="right")
+        lt.add_column("resolution", justify="right")
+        for lang, per in sorted(s.per_language.items()):
+            parsed = per.get("files_parsed", 0)
+            fb = per.get("files_fallback", 0)
+            in_scope = per.get("total_calls", 0) - per.get("external_calls", 0)
+            resolved = sum(
+                per.get(k, 0)
+                for k in ("resolved_exact", "resolved_self", "resolved_local",
+                          "resolved_heuristic")
+            )
+            rate = f"{resolved / in_scope:.1%}" if in_scope else "[dim]—[/dim]"
+            files_cell = f"{parsed:,}" if parsed else f"[dim]{fb:,} (file-level)[/dim]"
+            lt.add_row(lang, files_cell, f"{per.get('functions', 0):,}", rate)
+        console.print(lt)
+        console.print()
 
     t = Table(title="AST extraction", show_header=False, title_style="bold")
     t.add_row("files parsed", f"{s.files_parsed:,}")
@@ -175,6 +199,10 @@ def benchmark(
             "evidence_max_files": evidence_max_files,
             "eval_max_files": eval_max_files,
             "min_files": 2,
+            # Which suffix filter built this exam. The set widened once already (D018,
+            # .py-only -> full registry) and that silently changes any regenerated
+            # benchmark — so every manifest records the filter it was built with.
+            "source_suffixes": sorted(SOURCE_SUFFIXES),
         },
         pairs=hist.pairs,
     )
@@ -465,6 +493,174 @@ def view(
         server.serve_forever()
     except KeyboardInterrupt:
         console.print("\n[dim]stopped[/dim]")
+
+
+def _is_git_url(target: str) -> bool:
+    """Does `target` name a remote repo rather than a local path?"""
+    return target.startswith(("http://", "https://", "git@", "ssh://")) or target.endswith(".git")
+
+
+def _corpus_name(url: str) -> str:
+    """`https://github.com/encode/httpx.git` -> `httpx`."""
+    name = url.rstrip("/").rsplit("/", 1)[-1]
+    return name.removesuffix(".git") or "corpus"
+
+
+def _clone_corpus(url: str) -> Path:
+    """Clone (or reuse) a remote repo under ~/.labgo/corpora — outside this tree.
+
+    Living outside the tree is what D007 required by hand (`../labgo-corpora`); a
+    home-dir cache does it automatically. `--filter=blob:none` keeps full commit
+    history — which `labgo history` needs — while deferring blob downloads.
+    """
+    dest = Path.home() / ".labgo" / "corpora" / _corpus_name(url)
+    if dest.exists():
+        console.print(f"[dim]corpus already cloned:[/dim] {dest}  [dim](delete to re-clone)[/dim]")
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    console.print(f"[bold]cloning[/bold] {url} [dim]->[/dim] {dest}")
+    proc = subprocess.run(
+        ["git", "clone", "--filter=blob:none", url, str(dest)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        console.print(f"[bold red]git clone failed:[/bold red]\n{proc.stderr.strip()}")
+        raise typer.Exit(1)
+    return dest
+
+
+@app.command()
+def analyze(
+    target: str = typer.Argument(
+        ..., help="Repo to analyse: a local path or a git URL (any language)"
+    ),
+    out: Path = typer.Option(Path("data"), "--out", "-o", help="Output directory"),
+    serve: bool = typer.Option(True, "--serve/--no-serve", help="Open the viewer when done"),
+    port: int = typer.Option(4173, "--port", "-p"),
+    max_commits: int = typer.Option(2000, "--max-commits"),
+) -> None:
+    """One command, any repo, any language: graph + history + viewer. Zero credentials.
+
+    Point it at a local checkout or a git URL (cloned to ~/.labgo/corpora). Runs
+    `ingest` and `history`, prints one combined summary, then serves the impact
+    viewer. Needs no database, no API key, and no configuration — the cloud stages
+    (`load`/`baseline`/`embed`/`agent`) stay opt-in; run `labgo doctor` to see what
+    each one needs.
+    """
+    repo = _clone_corpus(target) if _is_git_url(target) else Path(target)
+    if not repo.is_dir():
+        console.print(f"[bold red]{repo} is not a directory.[/bold red]")
+        raise typer.Exit(1)
+
+    ingest(repo=repo, out=out)
+    console.print()
+    if (repo / ".git").exists():
+        history(
+            repo=repo,
+            out=out,
+            max_commits=max_commits,
+            evidence_max_files=20,
+            eval_max_files=10,
+        )
+    else:
+        console.print(
+            "[yellow]not a git repository[/yellow] — skipping co-change history; "
+            "impact mode will show call-graph reach only."
+        )
+
+    console.print(
+        "\n[bold green]done.[/bold green] Next steps:\n"
+        "  [bold]labgo benchmark[/bold] <repo> --name <name>   pin an eval set (D008)\n"
+        "  [bold]labgo doctor[/bold]                           check the cloud stages\n"
+    )
+    if serve:
+        view(data=out, port=port, open_browser=True)
+
+
+def _doctor_row(t: Table, ok: bool, what: str, fix: str) -> None:
+    """One readiness row: status, check name, and the exact fix when failing."""
+    mark = "[bold green]ok[/bold green]" if ok else "[bold red]missing[/bold red]"
+    t.add_row(mark, what, "" if ok else fix)
+
+
+@app.command()
+def doctor(
+    probe: bool = typer.Option(
+        False, "--probe", help="Also attempt a live Neo4j connection (a few seconds)"
+    ),
+) -> None:
+    """Per-stage readiness report with exact fixes. A report, not a gate — exits 0.
+
+    The core (`analyze`/`ingest`/`history`/`view`) needs nothing beyond `uv sync`
+    and git. Each cloud stage lists exactly what it is still missing.
+    """
+    from importlib.util import find_spec
+
+    from labgo.ingest import tsast
+
+    t = Table(title="labgo doctor", title_style="bold")
+    t.add_column("")
+    t.add_column("check")
+    t.add_column("fix", style="dim")
+
+    t.add_row("[bold]core[/bold]", "analyze / ingest / history / view", "")
+    _doctor_row(t, shutil.which("git") is not None, "git on PATH", "install git")
+    _doctor_row(
+        t,
+        tsast.AVAILABLE,
+        "tree-sitter (10-language AST tier)",
+        "uv sync  (file-level fallback active meanwhile)",
+    )
+    dist = Path(__file__).resolve().parents[2] / "viewer" / "dist"
+    _doctor_row(t, dist.exists(), "viewer bundle", "cd viewer && npm install && npm run build")
+
+    t.add_row("", "", "")
+    t.add_row("[bold]neo4j[/bold]", "load / baseline / mcp", "")
+    env_hint = "copy .env.example to .env and fill it in (Aura console, D013)"
+    _doctor_row(t, bool(os.environ.get("NEO4J_URI")), "NEO4J_URI", env_hint)
+    _doctor_row(t, bool(os.environ.get("NEO4J_PASSWORD")), "NEO4J_PASSWORD", env_hint)
+    if probe:
+        try:
+            driver = connect()
+            driver.verify_connectivity()
+            driver.close()
+            _doctor_row(t, ok=True, what="live connection", fix="")
+        except Exception as exc:  # noqa: BLE001 — a doctor reports failures, never raises
+            _doctor_row(t, False, "live connection", str(exc).splitlines()[0][:80])
+
+    t.add_row("", "", "")
+    t.add_row("[bold]vectors[/bold]", "embed / search", "")
+    _doctor_row(t, find_spec("voyageai") is not None, "voyageai", "uv sync --extra vectors")
+    _doctor_row(
+        t, bool(os.environ.get("VOYAGE_API_KEY")), "VOYAGE_API_KEY",
+        "add to .env (dash.voyageai.com)",
+    )
+
+    t.add_row("", "", "")
+    t.add_row("[bold]agent[/bold]", "agent / agent-eval", "")
+    _doctor_row(t, find_spec("langgraph") is not None, "langgraph", "uv sync --extra agents")
+    _doctor_row(t, find_spec("anthropic") is not None, "anthropic", "uv sync --extra agents")
+    _doctor_row(
+        t, bool(os.environ.get("ANTHROPIC_API_KEY")), "ANTHROPIC_API_KEY", "add to .env"
+    )
+
+    t.add_row("", "", "")
+    t.add_row("[bold]extras[/bold]", "mcp / observability", "")
+    _doctor_row(t, find_spec("mcp") is not None, "mcp", "uv sync --extra mcp")
+    _doctor_row(
+        t,
+        find_spec("opentelemetry") is not None,
+        "opentelemetry",
+        "uv sync --extra observability",
+    )
+
+    console.print(t)
+    console.print(
+        "\n[dim]The core runs with zero credentials. Cloud stages are opt-in — nothing "
+        "above blocks `labgo analyze`.[/dim]"
+    )
 
 
 @app.command()

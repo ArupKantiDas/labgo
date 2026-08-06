@@ -105,6 +105,7 @@ class ExtractionStats:
 
     files_parsed: int = 0
     files_failed: int = 0
+    files_fallback: int = 0  # recognized source with no AST backend — File node only (D018)
     functions: int = 0
     classes: int = 0
     total_calls: int = 0
@@ -114,6 +115,11 @@ class ExtractionStats:
     resolved_local: int = 0
     resolved_heuristic: int = 0
     unresolved_calls: int = 0
+    # Per-language breakdown, same counter keys as above (D018). This is the honesty
+    # mechanism for multi-language corpora: external-call classification quality varies
+    # by language, so a language where it is weak shows a visibly depressed rate of its
+    # own instead of silently polluting the global number.
+    per_language: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @property
     def resolved(self) -> int:

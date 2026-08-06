@@ -25,6 +25,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from labgo.ingest.languages import ALL_NOISE_NAMES, ALL_SOURCE_SUFFIXES
+
 # Two separate traps, both hit while building this:
 #
 # 1. argv cannot contain a null byte (execve strings are null-terminated), so
@@ -39,18 +41,14 @@ _REC = "@@C@@"
 _SEP = "\x1f"
 _FMT = "@@C@@%H%x1f%at%x1f%an"
 
-# Co-change is only meaningful between files the graph also models.
-SOURCE_SUFFIXES = {".py"}
+# Co-change is only meaningful between files the graph also models. Both sets come
+# from the language registry so ingest and history mining agree on what "source" means.
+# Deliberately the *full* registry set, not "extensions detected at HEAD" (D018):
+# history references files that no longer exist, and the eval set must be deterministic
+# — not dependent on ingest having run first or on what HEAD happens to contain.
+SOURCE_SUFFIXES = ALL_SOURCE_SUFFIXES
 
-NOISE_NAMES = {
-    "uv.lock",
-    "poetry.lock",
-    "package-lock.json",
-    "yarn.lock",
-    "Pipfile.lock",
-    "requirements.txt",
-    "CHANGELOG.md",
-}
+NOISE_NAMES = ALL_NOISE_NAMES
 
 
 @dataclass
@@ -120,7 +118,8 @@ class History:
 
 def _is_source(path: str) -> bool:
     p = Path(path)
-    return p.suffix in SOURCE_SUFFIXES and p.name not in NOISE_NAMES
+    # .lower(): .CPP / .Rb occur in the wild; the registry stores lowercase suffixes.
+    return p.suffix.lower() in SOURCE_SUFFIXES and p.name not in NOISE_NAMES
 
 
 def _run_git_log(repo: Path, max_commits: int) -> str:

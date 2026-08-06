@@ -4,7 +4,24 @@ from __future__ import annotations
 
 from collections import Counter
 
-from labgo.ingest.gitlog import leave_one_out_neighbors
+from labgo.ingest.gitlog import _is_source, leave_one_out_neighbors
+
+
+def test_is_source_covers_registry_languages() -> None:
+    """D018: the source filter is registry-driven, no longer .py-only."""
+    assert _is_source("cmd/main.go") is True
+    assert _is_source("src/App.tsx") is True
+    assert _is_source("lib/util.rb") is True
+    assert _is_source("pkg/mod.py") is True  # regression: Python still counts
+    assert _is_source("Weird.CPP") is True  # suffix matching is case-insensitive
+
+
+def test_is_source_rejects_noise_and_non_source() -> None:
+    assert _is_source("go.sum") is False
+    assert _is_source("pnpm-lock.yaml") is False
+    assert _is_source("Cargo.lock") is False
+    assert _is_source("README.md") is False
+    assert _is_source("uv.lock") is False
 
 
 def test_neighbor_survives_when_other_commits_also_contributed() -> None:
