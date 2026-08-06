@@ -19,20 +19,24 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
+from labgo.ingest.gitlog import leave_one_out_neighbors
+
 if TYPE_CHECKING:
+    from collections import Counter
+
     from neo4j import Driver
 
     from labgo.ingest.gitlog import EvalCase
 
 
-def predict_impact(
-    driver: Driver, seed: str, *, hops: int = 2, use_cochange: bool = True
-) -> set[str]:
-    """Predict the impact set for one seed file. `hops` must be >= 1.
+def predict_impact_calls(driver: Driver, seed: str, *, hops: int = 2) -> set[str]:
+    """Call-graph-only prediction: files reachable by `hops` CALLS hops from the seed.
 
-    The hop count is interpolated into the Cypher text rather than bound as a
-    parameter — Neo4j does not allow parameterising a variable-length relationship's
-    range. Safe here because `hops` is an internal int, never user-supplied text.
+    Structural — mined from source, not git history — so this is the one half of impact
+    prediction with no leakage risk against a history-derived eval set (D012). `hops` is
+    interpolated into the Cypher text rather than bound as a parameter — Neo4j does not
+    allow parameterising a variable-length relationship's range — safe because `hops` is
+    an internal int, never user-supplied text.
     """
     if hops < 1:
         raise ValueError("hops must be >= 1")
@@ -48,14 +52,56 @@ def predict_impact(
         )
         predicted.update(r["file"] for r in result)
 
-        if use_cochange:
+    predicted.discard(seed)
+    return predicted
+
+
+def predict_impact(
+    driver: Driver, seed: str, *, hops: int = 2, use_cochange: bool = True
+) -> set[str]:
+    """Live prediction: call-graph plus Neo4j's global CO_CHANGED edges.
+
+    For production/ad-hoc use (a one-off query, the impact viewer) — fine there, because
+    there is no eval case whose own commit could leak back into its own answer. **Do not
+    use this for benchmark scoring** when `use_cochange=True`: every eval case's commit
+    is, by construction, also inside the co-change evidence window that produced these
+    edges, so scoring against them gives the predictor partial credit for having seen the
+    answer (D012). `score_baseline`'s `use_cochange` path uses `predict_impact_loo`
+    instead, which does not have this problem.
+    """
+    predicted = predict_impact_calls(driver, seed, hops=hops)
+
+    if use_cochange:
+        with driver.session() as session:
             result = session.run(
                 "MATCH (:File {id: $seed})-[:CO_CHANGED]-(other:File) "
                 "RETURN DISTINCT other.id AS file",
                 seed=seed,
             )
             predicted.update(r["file"] for r in result)
+        predicted.discard(seed)
 
+    return predicted
+
+
+def predict_impact_loo(  # noqa: PLR0913  (each arg is a distinct piece of scoring
+    #  provenance — driver, seed, hops, the evidence, which commit to exclude from it,
+    #  and the threshold; collapsing them into a config object would hide D012's point)
+    driver: Driver,
+    seed: str,
+    *,
+    hops: int = 2,
+    pairs: Counter[tuple[str, str]],
+    exclude_files: set[str],
+    min_count: int = 2,
+) -> set[str]:
+    """Leave-one-out prediction for benchmark scoring (D012).
+
+    Call-graph via Neo4j (leak-free already, D012); co-change via `pairs` with the
+    scored case's own commit subtracted first — see `leave_one_out_neighbors`.
+    """
+    predicted = predict_impact_calls(driver, seed, hops=hops)
+    predicted |= leave_one_out_neighbors(pairs, seed, exclude_files, min_count=min_count)
     predicted.discard(seed)
     return predicted
 
@@ -101,15 +147,44 @@ class BaselineResult:
         return asdict(self)
 
 
-def score_baseline(
-    driver: Driver, cases: list[EvalCase], *, hops: int = 2, use_cochange: bool = True
+def score_baseline(  # noqa: PLR0913  (mirrors predict_impact_loo's args, plus cases)
+    driver: Driver,
+    cases: list[EvalCase],
+    *,
+    hops: int = 2,
+    use_cochange: bool = True,
+    pairs: Counter[tuple[str, str]] | None = None,
+    min_count: int = 2,
 ) -> tuple[BaselineResult, list[CaseScore]]:
-    """Run the baseline over every case and aggregate. Returns per-case scores too."""
+    """Run the baseline over every case and aggregate. Returns per-case scores too.
+
+    `use_cochange=True` requires `pairs` (from `benchmark.load_evidence`) so each case is
+    scored leave-one-out (D012) — there is no honest way to include co-change without it,
+    so this raises rather than silently falling back to the leaky global-edge path.
+    """
+    if use_cochange and pairs is None:
+        raise ValueError(
+            "use_cochange=True needs `pairs` (benchmark.load_evidence(bench_dir)) for "
+            "leave-one-out scoring — D012. Pass pairs=, or use_cochange=False for the "
+            "call-graph-only floor."
+        )
+
     scores = [
         CaseScore(
             seed=case.seed,
             expected=set(case.expected),
-            predicted=predict_impact(driver, case.seed, hops=hops, use_cochange=use_cochange),
+            predicted=(
+                predict_impact_loo(
+                    driver,
+                    case.seed,
+                    hops=hops,
+                    pairs=pairs,
+                    exclude_files={case.seed, *case.expected},
+                    min_count=min_count,
+                )
+                if use_cochange
+                else predict_impact_calls(driver, case.seed, hops=hops)
+            ),
         )
         for case in cases
     ]

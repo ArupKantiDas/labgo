@@ -20,6 +20,7 @@ from labgo.benchmark import (
     files_at,
     filter_answerable,
     load_benchmark,
+    load_evidence,
     verify_corpus,
     write_benchmark,
 )
@@ -175,9 +176,11 @@ def benchmark(
             "eval_max_files": eval_max_files,
             "min_files": 2,
         },
+        pairs=hist.pairs,
     )
     console.print(
         f"\n  [dim]wrote[/dim] {bench}/manifest.json\n  [dim]wrote[/dim] {bench}/cases.json"
+        f"\n  [dim]wrote[/dim] {bench}/evidence.json"
     )
     console.print(
         "\n[dim]Commit this directory. Regenerating it changes the exam — do that "
@@ -250,20 +253,28 @@ def baseline(
         help="Include CO_CHANGED neighbors in the prediction (calls/hybrid)",
     ),
     k: int = typer.Option(10, "--k", help="Vector neighbors per seed function (vectors/hybrid)"),
+    min_count: int = typer.Option(
+        2, "--min-count", help="Co-change occurrences required to count as a neighbor (D010)"
+    ),
     uri: str = typer.Option(None, "--uri"),
     user: str = typer.Option(None, "--user"),
     password: str = typer.Option(None, "--password"),
 ) -> None:
     """Score a deterministic impact prediction against a pinned benchmark. No LLM.
 
-    `--method calls` (default) is the unchanged Stage 2 baseline (D012). `vectors` and
-    `hybrid` are Stage 3b (D015) — same benchmark, same scoring, different predictor.
+    `--method calls` (default) is the Stage 2 baseline. `vectors` and `hybrid` are Stage 3b
+    (D015) — same benchmark, same scoring, different predictor. `--cochange` (on by default
+    for calls/hybrid) scores co-change leave-one-out (D012) — each case's own commit is
+    excluded from its own evidence, so the number is honest rather than leaked.
     """
     manifest, cases = load_benchmark(bench_dir)
+    pairs = load_evidence(bench_dir) if cochange and method in {"calls", "hybrid"} else None
     driver = connect(uri, user, password)
     try:
         if method == "calls":
-            result, _ = score_baseline(driver, cases, hops=hops, use_cochange=cochange)
+            result, _ = score_baseline(
+                driver, cases, hops=hops, use_cochange=cochange, pairs=pairs, min_count=min_count
+            )
             title = (
                 f"Deterministic baseline — '{manifest['name']}' "
                 f"(hops={hops}, cochange={'on' if cochange else 'off'})"
@@ -272,7 +283,15 @@ def baseline(
             result, _ = score_vector_baseline(driver, cases, k=k)
             title = f"Vector baseline — '{manifest['name']}' (k={k})"
         elif method == "hybrid":
-            result, _ = score_hybrid_baseline(driver, cases, hops=hops, use_cochange=cochange, k=k)
+            result, _ = score_hybrid_baseline(
+                driver,
+                cases,
+                hops=hops,
+                use_cochange=cochange,
+                k=k,
+                pairs=pairs,
+                min_count=min_count,
+            )
             title = (
                 f"Hybrid baseline — '{manifest['name']}' "
                 f"(hops={hops}, cochange={'on' if cochange else 'off'}, k={k})"

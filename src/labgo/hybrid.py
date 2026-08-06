@@ -19,9 +19,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
-from labgo.baseline import CaseScore, predict_impact
+from labgo.baseline import CaseScore, predict_impact_calls, predict_impact_loo
 
 if TYPE_CHECKING:
+    from collections import Counter
+
     from neo4j import Driver
 
     from labgo.ingest.gitlog import EvalCase
@@ -66,16 +68,39 @@ def predict_impact_vector(driver: Driver, seed: str, *, k: int = 10) -> set[str]
     return predicted
 
 
-def predict_impact_hybrid(
-    driver: Driver, seed: str, *, hops: int = 2, use_cochange: bool = True, k: int = 10
+def predict_impact_hybrid(  # noqa: PLR0913  (calls, cochange, vectors, and D012's
+    #  leave-one-out inputs are each a distinct knob — see predict_impact_loo)
+    driver: Driver,
+    seed: str,
+    *,
+    hops: int = 2,
+    use_cochange: bool = True,
+    k: int = 10,
+    pairs: Counter[tuple[str, str]] | None = None,
+    exclude_files: set[str] | None = None,
+    min_count: int = 2,
 ) -> set[str]:
     """Union of the call-graph (+ optional co-change) prediction and the vector prediction.
 
     Naive on purpose for a first measurement — no weighting, no re-ranking, just set union.
     If this doesn't beat the call-graph-only floor, a smarter blend isn't worth building
     yet; if it does, *how much* it helps is the number that justifies building one.
+
+    `use_cochange=True` requires `pairs` and `exclude_files` (the scored case's own seed +
+    expected) so co-change scores leave-one-out, same reasoning as `baseline.score_baseline`
+    (D012) — D015's own citable hybrid number sidesteps this entirely with `--no-cochange`.
     """
-    calls = predict_impact(driver, seed, hops=hops, use_cochange=use_cochange)
+    if use_cochange:
+        if pairs is None or exclude_files is None:
+            raise ValueError(
+                "use_cochange=True needs `pairs` and `exclude_files` for leave-one-out "
+                "scoring (D012). Pass both, or use_cochange=False."
+            )
+        calls = predict_impact_loo(
+            driver, seed, hops=hops, pairs=pairs, exclude_files=exclude_files, min_count=min_count
+        )
+    else:
+        calls = predict_impact_calls(driver, seed, hops=hops)
     vectors = predict_impact_vector(driver, seed, k=k)
     return calls | vectors
 
@@ -134,13 +159,15 @@ def score_vector_baseline(
     return aggregate_scores(scores, method="vectors", params={"k": k}), scores
 
 
-def score_hybrid_baseline(
+def score_hybrid_baseline(  # noqa: PLR0913  (mirrors predict_impact_hybrid's args, plus cases)
     driver: Driver,
     cases: list[EvalCase],
     *,
     hops: int = 2,
     use_cochange: bool = True,
     k: int = 10,
+    pairs: Counter[tuple[str, str]] | None = None,
+    min_count: int = 2,
 ) -> tuple[RetrievalResult, list[CaseScore]]:
     """Run the hybrid (call-graph | vector) prediction over every case and aggregate."""
     scores = [
@@ -148,7 +175,14 @@ def score_hybrid_baseline(
             seed=case.seed,
             expected=set(case.expected),
             predicted=predict_impact_hybrid(
-                driver, case.seed, hops=hops, use_cochange=use_cochange, k=k
+                driver,
+                case.seed,
+                hops=hops,
+                use_cochange=use_cochange,
+                k=k,
+                pairs=pairs,
+                exclude_files={case.seed, *case.expected} if use_cochange else None,
+                min_count=min_count,
             ),
         )
         for case in cases

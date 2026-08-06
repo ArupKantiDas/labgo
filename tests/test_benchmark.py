@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import subprocess
+from collections import Counter
 
 import pytest
 
-from labgo.benchmark import CorpusMismatchError, filter_answerable, verify_corpus
+from labgo.benchmark import (
+    CorpusMismatchError,
+    FilterReport,
+    filter_answerable,
+    load_evidence,
+    verify_corpus,
+    write_benchmark,
+)
 from labgo.ingest.gitlog import EvalCase
 
 
@@ -84,3 +92,33 @@ def test_corpus_mismatch_raises_rather_than_scoring_wrong_world(tmp_path) -> Non
     # The error has to be actionable, not just true.
     assert "git -C" in str(exc.value)
     assert "checkout" in str(exc.value)
+
+
+def test_write_benchmark_persists_raw_pairs_for_leave_one_out(tmp_path) -> None:
+    """D012's fix needs the *unfiltered* pairs back — including counts below min_count."""
+    repo = tmp_path / "corpus"
+    repo.mkdir()
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "t@example.com"],
+        ["config", "user.name", "t"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "f.py").write_text("x = 1\n")
+    for args in (["add", "-A"], ["commit", "-qm", "one"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    pairs = Counter({("a.py", "b.py"): 3, ("c.py", "d.py"): 1})
+    bench = write_benchmark(
+        out_dir=tmp_path / "benchmarks",
+        name="t",
+        repo=repo,
+        cases=[_case("a.py", "b.py")],
+        report=FilterReport(before=1, after=1, dropped_dead_seed=0, dropped_dead_expected=0),
+        extraction={"max_commits": 1},
+        pairs=pairs,
+    )
+
+    loaded = load_evidence(bench)
+    assert loaded == pairs
+    assert loaded[("c.py", "d.py")] == 1  # below min_count=2, but not dropped

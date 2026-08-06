@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -123,8 +124,16 @@ def write_benchmark(  # noqa: PLR0913  (each argument is a distinct provenance f
     cases: list[EvalCase],
     report: FilterReport,
     extraction: dict[str, Any],
+    pairs: Counter[tuple[str, str]],
 ) -> Path:
-    """Write cases plus a manifest recording everything needed to reproduce the score."""
+    """Write cases, the manifest, and the raw co-change evidence (D012).
+
+    `pairs` is the *unfiltered* aggregate from `extract_history` — every count, not just
+    `min_count`-and-above — pinned alongside the cases so `labgo baseline --cochange` can
+    later subtract each case's own commit before scoring it (leave-one-out, D012). Without
+    this, only the already-`min_count`-filtered `data/cochange.json` would be available,
+    which is too lossy to subtract a single commit's contribution from correctly.
+    """
     sha = corpus_sha(repo)
     try:
         url = _git(repo, "config", "--get", "remote.origin.url")
@@ -154,6 +163,10 @@ def write_benchmark(  # noqa: PLR0913  (each argument is a distinct provenance f
     (bench / "cases.json").write_text(
         json.dumps([c.to_dict() for c in cases], indent=2) + "\n", encoding="utf-8"
     )
+    (bench / "evidence.json").write_text(
+        json.dumps({"pairs": [[a, b, n] for (a, b), n in pairs.most_common()]}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return bench
 
 
@@ -163,6 +176,12 @@ def load_benchmark(bench_dir: Path) -> tuple[dict[str, Any], list[EvalCase]]:
     raw = json.loads((bench_dir / "cases.json").read_text(encoding="utf-8"))
     cases = [EvalCase(sha=c["sha"], seed=c["seed"], expected=c["expected"]) for c in raw]
     return manifest, cases
+
+
+def load_evidence(bench_dir: Path) -> Counter[tuple[str, str]]:
+    """Read a benchmark's raw co-change pairs back — the input to leave-one-out (D012)."""
+    raw = json.loads((bench_dir / "evidence.json").read_text(encoding="utf-8"))
+    return Counter({(a, b): n for a, b, n in raw["pairs"]})
 
 
 def verify_corpus(manifest: dict[str, Any], repo: Path) -> None:

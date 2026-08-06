@@ -230,3 +230,36 @@ def co_change_edges(hist: History, min_count: int = 2) -> list[dict[str, Any]]:
     return [
         {"src": a, "dst": b, "count": n} for (a, b), n in hist.pairs.most_common() if n >= min_count
     ]
+
+
+def leave_one_out_neighbors(
+    pairs: Counter[tuple[str, str]], seed: str, exclude_files: set[str], *, min_count: int = 2
+) -> set[str]:
+    """Co-change neighbors of `seed`, with one commit's own contribution subtracted first.
+
+    Fixes D012: scoring a case mined from commit C must not let C itself count as
+    co-change evidence for predicting C. `pairs` is the *raw*, unfiltered aggregate
+    (every count, not just `min_count`-and-above) — filtering first would make a pair
+    that only clears the threshold *because of* the excluded commit look like it never
+    existed, when the correct behaviour is to drop it from the leave-one-out view but
+    leave it alone for every other case.
+
+    `exclude_files` is the excluded commit's own filtered+sorted file list (for an
+    `EvalCase`, that's exactly `{case.seed, *case.expected}` — the two are the same set
+    by construction, see `EvalCase`'s docstring). A commit contributes at most 1 to any
+    pair (files within one commit form a set, no repeats), so a pair with both endpoints
+    in `exclude_files` had exactly 1 subtracted, never more.
+
+    O(len(pairs)) per call — a full scan, not indexed. Fine at httpx scale (~14k pairs x
+    236 cases is sub-second); the honest number matters more than the constant factor,
+    and D012 already flagged this fix as real added cost, not a one-line change.
+    """
+    neighbors: set[str] = set()
+    for (a, b), count in pairs.items():
+        if seed not in (a, b):
+            continue
+        other = b if a == seed else a
+        adjusted = count - 1 if other in exclude_files else count
+        if adjusted >= min_count:
+            neighbors.add(other)
+    return neighbors

@@ -43,10 +43,17 @@ added, is what proves the agents earned their place. Skipping it means never bei
 answer "how do you know the agents helped?"
 
 **Stage 2 result (httpx, 236 cases, 2-hop CALLS closure, no LLM):** 22.4% mean recall,
-28.8% hit rate, call-graph only. A naive combined score with CO_CHANGED reads as 94.9% but
-is **leakage, not signal** (D012) — the eval labels and
-the CO_CHANGED edges are mined from the same git history. 22.4% is the honest number every
-later stage has to beat.
+28.8% hit rate, call-graph only. This is the honest number every later stage has to beat.
+
+A combined score with CO_CHANGED reads as 92.1% recall (D012, leave-one-out — each case's
+own commit is excluded from its own evidence, fixing the leakage the first, 94.9%
+measurement had). But the fix barely moved the number, and the reason turned out to
+matter more than the leak: the leak-free combined predictor's mean prediction size is
+**40.5 of ~60 files per case** — two-thirds of the repository. A predictor that returns
+most of the codebase scores well on recall regardless of whether it found anything
+specific, the same failure mode D015 caught for an early vector measurement. 92.1% is
+not yet a fair number to cite either — see D012 for the full breakdown and D010 for the
+matched-budget sweep this motivates.
 
 ## Quickstart
 
@@ -71,8 +78,9 @@ None of the three needs a database, an API key, or a network call.
 cp .env.example .env               # fill in NEO4J_URI / NEO4J_PASSWORD from your Aura console (D013)
 uv run labgo load --clear          # data/graph.json (+cochange.json) -> Neo4j
 
-uv run labgo benchmark ../labgo-corpora/httpx --name httpx   # pin the exam (D008)
-uv run labgo baseline benchmarks/httpx --hops 2 --no-cochange  # the honest number (D012)
+uv run labgo benchmark ../labgo-corpora/httpx --name httpx     # pin the exam (D008)
+uv run labgo baseline benchmarks/httpx --hops 2 --no-cochange  # the honest floor (D012)
+uv run labgo baseline benchmarks/httpx --hops 2 --cochange     # leave-one-out combined (D012)
 ```
 
 No local database needed — the default target is a Neo4j AuraDB Free instance (D013).
@@ -144,6 +152,8 @@ Resolution  27.2% of 2,845 in-scope call sites
             4 exact · 99 self/cls · 327 local · 343 heuristic · 2,072 unresolved
 History     1,482 commits scanned -> 610 eval cases · 1,745 co-change edges
 Baseline    22.4% mean recall · 28.8% hit rate (call-graph only, 236-case benchmark, D012)
+            calls+cochange (leave-one-out) 92.1% recall · 5.9% precision · predicts
+            40.5/~60 files/case — not yet a fair number, see D012
 Vectors     1,229 Function/Class nodes embedded (voyage-code-3) · 162,884 tokens billed
 Retrieval   calls 22.4% · vectors 19.3% (matched ~4-file budget) · hybrid 40.1% (D015)
 ```

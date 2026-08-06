@@ -271,7 +271,9 @@ unaffected — this decision is scoped to the embedding step only.
 ---
 
 ## D012 — The deterministic baseline leaks against its own eval set via CO_CHANGED
-**Date:** 2026-08-05 · **Status:** open — needs leave-one-out fix before the combined number is quotable
+**Date:** 2026-08-05 · **Status:** resolved (2026-08-06) — leave-one-out shipped; the
+combined number moved less than expected, and checking *why* found a second, bigger
+problem than leakage. See "Resolved" below.
 
 First Stage 2 measurement, httpx benchmark (236 cases), 2-hop CALLS traversal:
 
@@ -307,6 +309,56 @@ once globally, so it is real added cost, not a one-line fix.
 
 **Until fixed:** report the call-graph-only number as the citable baseline; the combined
 number may be shown for direction but must carry this caveat every time.
+
+**Resolved.** `benchmark.write_benchmark` now pins the *raw*, unfiltered co-change pairs
+alongside a benchmark (`evidence.json` — every count, not just `min_count`-and-above,
+because a pair that only clears the threshold *due to* the excluded commit needs to lose
+that support, not have it hidden by an earlier filter). `gitlog.leave_one_out_neighbors`
+subtracts exactly one commit's contribution before applying `min_count`. `score_baseline`
+and `score_hybrid_baseline` now require `pairs=` (via `benchmark.load_evidence`) whenever
+`use_cochange=True`, and raise rather than silently falling back to the old leaky path —
+the old `predict_impact` global-CO_CHANGED query still exists for live/production use
+(single ad-hoc queries, the impact viewer) where no case can leak into its own answer.
+
+**Re-measured on httpx (236 cases, hops=2):**
+
+| | recall (mean) | precision (mean) | hit rate |
+|---|---|---|---|
+| call-graph only (unaffected by this fix) | 22.4% | 12.2% | 28.8% |
+| calls + CO_CHANGED, **old leaky number** | 94.9% | 7.2% | 97.5% |
+| calls + CO_CHANGED, **leave-one-out (fixed)** | **92.1%** | **5.9%** | 97.0% |
+
+**The fix barely moved the number, and that itself needed explaining before trusting
+either one.** 94.9% → 92.1% is a 2.8-point drop, not the collapse a "was leaking"
+diagnosis implies. Checked directly: of the 510 (seed, expected-file) pairs in the eval
+set that have *any* co-change evidence, 441 (86.5%) are backed by co-occurrence in
+commits *other than* the one being scored — leave-one-out removes one commit's support
+from a pair that often recurs 5, 10, even 39 times elsewhere in httpx's history (D010's
+own table already showed coupling is concentrated, not evenly spread). Only 69 pairs
+(13.5%) were single-commit flukes that leave-one-out correctly kills. **Same-commit
+leakage was real but never the dominant driver of the inflated score.**
+
+**Checking predicted-set size — the same discipline D015 used to catch its own inflated
+vector number — found the actual problem.** Mean prediction size: call-graph alone 4.8
+files/case; calls + CO_CHANGED (leave-one-out) **40.5 files/case**, against a ~60-file
+corpus — **two-thirds of the entire repository, per case, on average** (max 74 — larger
+than the corpus's Python-file count alone, since the corpus also contains non-`.py`
+files the prediction set doesn't restrict against). A predictor that returns most of the
+codebase scores well on recall independent of whether it found anything specific — the
+identical failure mode D015 named "a broken clock is right twice a day," just from
+`min_count=2` being too loose for httpx's scale rather than an unbounded `k`.
+
+**Consequence — the citable number does not change, but the reason does.** 22.4% /
+12.2% (call-graph only) remains the honest floor. The leak-free combined number, 92.1% /
+5.9%, is **not yet a fair "beat this" target either** — not because of leakage anymore
+(that's fixed and tested), but because it is scored at an unbounded, uncapped prediction
+budget nobody chose on purpose. Reporting it without its predicted-set size would repeat
+D005/D015's exact mistake in a new spot.
+
+**Follow-up, now scoped precisely by this data:** D010's sweep should treat `min_count`
+as the primary lever (not just `evidence_max_files`) and evaluate at a budget matched to
+the call-graph baseline (~4.8 files/case) — the same matched-budget methodology D015
+already validated for vectors, now needed for co-change too.
 
 ---
 

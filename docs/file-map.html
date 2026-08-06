@@ -465,7 +465,10 @@
       an <code>EvalCase</code> per commit — one seed file, the rest as the "expected" answer.
       Excludes merges and oversized commits, because pairs grow as N² and five commits out of
       620 otherwise supply 30% of all coupling evidence (D010). The parser also survived two
-      subprocess/encoding bugs recorded in D006 — one of which silently returned zero commits.</div>
+      subprocess/encoding bugs recorded in D006 — one of which silently returned zero commits.
+      <code>leave_one_out_neighbors()</code> (D012) subtracts one commit's own contribution
+      from the raw pairs before applying <code>min_count</code> — the fix for scoring a case
+      against evidence that includes the very commit being predicted.</div>
     </div>
     <div class="file">
       <div class="path">benchmark.py</div>
@@ -474,7 +477,11 @@
       written together to <code>benchmarks/&lt;name&gt;/</code>. <code>filter_answerable()</code>
       drops any case referencing a file no longer in the tree — on httpx that was 58% of raw
       cases (D008) — and <code>verify_corpus()</code> refuses to score a benchmark against a
-      repo that has since moved past that commit.</div>
+      repo that has since moved past that commit. <code>write_benchmark()</code> also pins the
+      <em>raw</em>, unfiltered co-change pairs to <code>evidence.json</code> (D012) —
+      <code>load_evidence()</code> reads them back so <code>baseline.py</code> can subtract a
+      case's own commit at scoring time, which needs every count, not just the ones that
+      already cleared <code>min_count</code>.</div>
     </div>
     <div class="file">
       <div class="path">graph.py</div>
@@ -491,13 +498,21 @@
     <div class="file">
       <div class="path">baseline.py</div>
       <div class="desc">Stage 2's actual deliverable: a number, measured before any LLM
-      touches the problem. <code>predict_impact()</code> is pure Cypher — functions the seed
-      file contains, callers reachable within <code>hops</code> traversals of
-      <code>CALLS</code>, plus (optionally) <code>CO_CHANGED</code> neighbors. Measured on
-      httpx: <b>22.4% recall, 28.8% hit rate</b>, call-graph only. Combining with
-      <code>CO_CHANGED</code> reads as 94.9% but is leakage, not signal (D012) — the eval
-      labels and the co-change edges are mined from the same git history, so the exact commit
-      being scored partly supplies its own answer.</div>
+      touches the problem. <code>predict_impact_calls()</code> is pure Cypher — functions the
+      seed file contains, callers reachable within <code>hops</code> traversals of
+      <code>CALLS</code> — structural, so it carries no leakage risk. Measured on httpx:
+      <b>22.4% recall, 28.8% hit rate</b>, the honest floor. <code>predict_impact()</code>
+      adds Neo4j's <em>global</em> <code>CO_CHANGED</code> edges on top — fine for a live,
+      one-off query, but scoring a benchmark against it leaks: every eval case's own commit
+      is inside its own co-change evidence window (D012). <code>predict_impact_loo()</code> is
+      the fix used for scoring — same call-graph query, but co-change comes from
+      <code>gitlog.leave_one_out_neighbors()</code> with the scored case's own commit
+      subtracted first. Leak-free result: <b>92.1% recall, 5.9% precision</b> — barely below
+      the leaky 94.9%, because checking predicted-set size found the real problem: it predicts
+      <b>40.5 of ~60 files per case</b>, the same "returns most of the corpus" failure D015
+      caught for an early vector measurement. <code>score_baseline()</code> now requires
+      <code>pairs=</code> (from <code>benchmark.load_evidence()</code>) whenever
+      <code>use_cochange=True</code>, and raises rather than silently scoring leaky.</div>
     </div>
     <div class="file">
       <div class="path">embed.py</div>
@@ -524,8 +539,10 @@
       (~4 files/case), vectors alone score 19.3% — call-graph's 22.4% holds up. But
       <code>predict_impact_hybrid()</code>, a plain set union of both signals, reaches
       <b>40.1% recall / 14.8% precision</b> — better than either alone, meaning the two
-      signals miss different things. Imports <code>predict_impact</code> and
-      <code>CaseScore</code> from <code>baseline.py</code> and nothing from
+      signals miss different things. Imports <code>predict_impact_calls</code> /
+      <code>predict_impact_loo</code> and <code>CaseScore</code> from <code>baseline.py</code>
+      (D012: <code>use_cochange=True</code> here needs <code>pairs=</code> too, same
+      leave-one-out requirement as <code>baseline.score_baseline</code>) and nothing from
       <code>embed.py</code>, so it has no <code>voyageai</code> dependency: scoring reuses
       vectors <code>labgo embed</code> already wrote, no live Voyage call needed to rerun it.</div>
     </div>
@@ -601,8 +618,19 @@
       <div class="path">tests/test_benchmark.py</div>
       <div class="desc">Exercises <code>benchmark.py</code>: cases with a dead seed or a dead
       expected file get dropped, the drop-percentage arithmetic is correct including the 0/0
-      case, and a corpus at the wrong commit raises <code>CorpusMismatch</code> with an
-      actionable fix command rather than silently scoring the wrong world.</div>
+      case, a corpus at the wrong commit raises <code>CorpusMismatch</code> with an
+      actionable fix command rather than silently scoring the wrong world, and (D012)
+      <code>write_benchmark()</code>/<code>load_evidence()</code> round-trip raw co-change
+      pairs unchanged — including counts below <code>min_count</code>, which leave-one-out
+      needs and the old, already-filtered <code>cochange.json</code> couldn't provide.</div>
+    </div>
+    <div class="file">
+      <div class="path">tests/test_gitlog.py</div>
+      <div class="desc">D012's actual fix, isolated: <code>leave_one_out_neighbors()</code>
+      keeps a neighbor whose count survives other commits' support, drops one whose only
+      support was the excluded commit (the bug this exists to catch), leaves untouched pairs
+      alone, and never subtracts more than the one commit's single contribution even when
+      <code>min_count</code> is raised past it. Pure Python, no live Neo4j.</div>
     </div>
     <div class="file">
       <div class="path">tests/test_graph.py</div>
@@ -658,6 +686,14 @@
       <div class="desc">The committed, pinned exam: corpus SHA <code>b5addb64</code>, 236
       answerable cases surviving from 565 raw (D008), plus the extraction parameters and filter
       rule that produced them — everything needed to reproduce or invalidate the score later.</div>
+    </div>
+    <div class="file">
+      <div class="path">benchmarks/httpx/evidence.json</div>
+      <div class="desc">Added for D012: the <em>raw</em>, unfiltered co-change pairs (3,348 of
+      them, every count from 1 to 39) pinned alongside the same exam. Deliberately not
+      filtered to <code>min_count</code> — leave-one-out has to subtract a commit's
+      contribution <em>before</em> the threshold is applied, or a pair that only clears it
+      because of the excluded commit would look like it never existed.</div>
     </div>
   </div>
 
@@ -867,7 +903,7 @@
   <figure>
     <div class="diagram-scroll">
       <svg class="dfd" viewBox="0 0 1160 965" role="img"
-           aria-label="Neo4j AuraDB, on the right, is the shared sink and source for five independent CLI flows. load writes graph.json's nodes and edges plus co-change edges into it. baseline --method calls sends a Cypher traversal query and gets back file ids, scored to a measured 22.4% recall. baseline --method vectors or hybrid routes through hybrid.py instead, which ranks candidates by best-matching embedded node and unions with the call-graph prediction, scoring 19.3% vector-only and 40.1% hybrid recall. embed reads source text from the corpus repo, sends it to the Voyage API in batches, and writes the returned vectors plus a vector index back into Neo4j. search sends a query to Voyage for embedding, then queries Neo4j's vector index for nearest neighbours and prints them.">
+           aria-label="Neo4j AuraDB, on the right, is the shared sink and source for five independent CLI flows. load writes graph.json's nodes and edges plus co-change edges into it. baseline --method calls reads cases.json plus the raw evidence.json pairs, sends a Cypher traversal query for the call graph, subtracts each case's own commit from the co-change pairs before scoring it (leave-one-out, D012), and gets back file ids: 22.4% recall call-graph-only, 92.1% recall with co-change included but predicting two-thirds of the corpus per case. baseline --method vectors or hybrid routes through hybrid.py instead, which ranks candidates by best-matching embedded node and unions with the call-graph prediction, scoring 19.3% vector-only and 40.1% hybrid recall. embed reads source text from the corpus repo, sends it to the Voyage API in batches, and writes the returned vectors plus a vector index back into Neo4j. search sends a query to Voyage for embedding, then queries Neo4j's vector index for nearest neighbours and prints them.">
         <!-- trunk: Neo4j Aura -->
         <rect x="950" y="20" width="190" height="915" rx="7" class="box box-source"></rect>
         <text x="964" y="50" font-size="13" font-weight="700">Neo4j AuraDB</text>
@@ -893,13 +929,13 @@
         <!-- Row 2: baseline -->
         <rect x="20" y="175" width="230" height="55" rx="7" class="box box-file"></rect>
         <text x="34" y="196" font-size="12.5" font-weight="700">benchmarks/httpx/</text>
-        <text x="34" y="212" font-size="10.5" class="sub">cases.json (236, D008)</text>
+        <text x="34" y="212" font-size="10.5" class="sub">cases.json (236) + evidence.json (D012)</text>
 
         <rect x="310" y="160" width="280" height="90" rx="7" class="box"></rect>
-        <text x="450" y="152" text-anchor="middle" class="cli-label" font-size="10">cli.baseline() --hops 2</text>
+        <text x="450" y="152" text-anchor="middle" class="cli-label" font-size="10">cli.baseline() --hops 2 --cochange</text>
         <text x="324" y="186" font-size="12.5" font-weight="700">baseline.py</text>
-        <text x="324" y="203" font-size="10.5" class="sub">predict_impact() · score_baseline()</text>
-        <text x="324" y="217" font-size="10.5" class="sub">CALLS*1..hops (+ CO_CHANGED)</text>
+        <text x="324" y="203" font-size="10.5" class="sub">predict_impact_calls() · predict_impact_loo()</text>
+        <text x="324" y="217" font-size="10.5" class="sub">CALLS*1..hops (+ CO_CHANGED, leave-one-out)</text>
         <text x="324" y="233" font-size="10.5" class="sub">no LLM, no ranking</text>
 
         <polyline points="250,202 310,202" class="edge" marker-end="url(#arrow)"></polyline>
@@ -908,10 +944,12 @@
         <polyline points="950,222 590,222" class="edge-dashed" marker-end="url(#arrow-muted)"></polyline>
         <text x="770" y="238" text-anchor="middle" font-size="10" class="cli-label">file ids (returned)</text>
 
-        <rect x="310" y="270" width="280" height="55" rx="7" class="box box-file"></rect>
+        <rect x="310" y="270" width="280" height="70" rx="7" class="box box-file"></rect>
         <circle cx="327" cy="291" r="4" class="dot-ok"></circle>
         <text x="338" y="295" font-size="12" font-weight="700">console</text>
-        <text x="324" y="311" font-size="10" class="sub">22.4% recall · 28.8% hit rate (D012)</text>
+        <text x="324" y="311" font-size="10" class="sub">calls-only: 22.4% recall · 28.8% hit rate</text>
+        <text x="324" y="326" font-size="10" class="sub">+cochange (leave-one-out): 92.1% recall, but</text>
+        <text x="324" y="338" font-size="9.5" class="sub">predicts 40.5/~60 files/case — see D012</text>
         <polyline points="450,250 450,270" class="edge" marker-end="url(#arrow)"></polyline>
 
         <!-- Row 2.5: hybrid (Stage 3b, D015) — reuses row 2's cases.json -->
@@ -988,7 +1026,10 @@
     <figcaption>
       <b>Neo4j AuraDB</b> (right) is the shared sink and source for five independent CLI
       flows — unlike Stage 1's diagram, there's no single bus, because each command's inputs
-      differ. <b>load</b> and <b>baseline --method calls</b> read committed JSON on the left.
+      differ. <b>load</b> and <b>baseline --method calls</b> read committed JSON on the left —
+      the latter now reads <code>evidence.json</code> too, not just <code>cases.json</code>,
+      so it can subtract each case's own commit from the co-change pairs before scoring it
+      (leave-one-out, D012) instead of scoring against Neo4j's global, leaky edges.
       <b>baseline --method vectors|hybrid</b> reuses that same <code>cases.json</code> but
       routes through <code>hybrid.py</code> instead of <code>baseline.py</code> — no
       <code>voyageai</code> dependency, since it only reads vectors <code>embed</code>
