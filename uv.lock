@@ -2,7 +2,8 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
-    "python_full_version >= '3.13' and python_full_version < '3.15'",
+    "python_full_version == '3.14.*'",
+    "python_full_version == '3.13.*'",
     "python_full_version < '3.13'",
     "python_full_version >= '3.15'",
 ]
@@ -639,7 +640,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15" },
     { name = "voyageai", marker = "extra == 'vectors'", specifier = ">=0.5.0" },
 ]
-provides-extras = ["agents", "dev", "vectors"]
+provides-extras = ["vectors", "agents", "dev"]
 
 [[package]]
 name = "langchain-core"

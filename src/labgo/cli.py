@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
-from labgo.baseline import score_baseline
+from labgo.baseline import CaseScore, score_baseline
 from labgo.benchmark import (
     CorpusMismatchError,
     corpus_sha,
@@ -465,6 +465,135 @@ def view(
         server.serve_forever()
     except KeyboardInterrupt:
         console.print("\n[dim]stopped[/dim]")
+
+
+@app.command()
+def agent(
+    seed: str = typer.Argument(..., help="File about to change, e.g. 'httpx/_client.py'"),
+    repo: Path = typer.Argument(..., help="Corpus repo — read for git log (likely_reviewer)"),
+    model: str = typer.Option(None, "--model", help="Default: claude-haiku-4-5-20251001"),
+    max_turns: int = typer.Option(6, "--max-turns"),
+    uri: str = typer.Option(None, "--uri"),
+    user: str = typer.Option(None, "--user"),
+    password: str = typer.Option(None, "--password"),
+    api_key: str = typer.Option(None, "--api-key", help="Default: $ANTHROPIC_API_KEY"),
+) -> None:
+    """Ask the Stage 4 agent one impact question. Requires Neo4j + $ANTHROPIC_API_KEY.
+
+    Routes between call-graph traversal, co-change history, and semantic search — the
+    routing decision an LLM makes is the point of this stage (D001). Compare its answer
+    against `labgo baseline` before trusting it: the deterministic hybrid+cochange floor
+    is 43.3% recall / 15.4% precision (D015) with no LLM and no per-call cost.
+    """
+    from labgo.agent import DEFAULT_MODEL, run_agent
+
+    driver = connect(uri, user, password)
+    try:
+        result = run_agent(
+            driver, repo, seed, model=model or DEFAULT_MODEL, max_turns=max_turns, api_key=api_key
+        )
+    finally:
+        driver.close()
+
+    console.print(f"\n[bold]{result.report}[/bold]\n")
+    t = Table(title="Run stats", show_header=False, title_style="bold")
+    t.add_row("predicted files", f"{len(result.predicted_files)}: {sorted(result.predicted_files)}")
+    if result.unrecognized_mentions:
+        t.add_row("unrecognized mentions", f"[yellow]{result.unrecognized_mentions}[/yellow]")
+    t.add_row("turns", str(result.turns))
+    t.add_row("tool calls", str(result.tool_calls))
+    t.add_row("tokens", f"{result.input_tokens:,} in / {result.output_tokens:,} out")
+    console.print(t)
+
+
+@app.command(name="agent-eval")
+def agent_eval(
+    bench_dir: Path = typer.Argument(..., help="Benchmark directory, e.g. benchmarks/httpx"),
+    repo: Path = typer.Argument(..., help="Corpus repo — read for git log (likely_reviewer)"),
+    n: int = typer.Option(40, "--n", help="Sample size — full benchmark costs real tokens"),
+    model: str = typer.Option(None, "--model", help="Default: claude-haiku-4-5-20251001"),
+    max_turns: int = typer.Option(6, "--max-turns"),
+    sample_seed: int = typer.Option(42, "--sample-seed", help="Deterministic sample selection"),
+    out: Path = typer.Option(None, "--out", help="Write the full transcript here (JSON)"),
+    uri: str = typer.Option(None, "--uri"),
+    user: str = typer.Option(None, "--user"),
+    password: str = typer.Option(None, "--password"),
+    api_key: str = typer.Option(None, "--api-key", help="Default: $ANTHROPIC_API_KEY"),
+) -> None:
+    """Score the Stage 4 agent against a sample of a pinned benchmark. Costs real tokens.
+
+    Samples `--n` cases (deterministic via `--sample-seed`) rather than the full benchmark
+    — 236 cases through a multi-turn tool-calling agent is real money and real time,
+    disclosed as a sampling choice (same honesty standard as D003/D008's filtering), not
+    hidden. Reuses `hybrid.aggregate_scores` so the result is directly comparable to every
+    other stage's `RetrievalResult`.
+    """
+    import random as _random
+
+    from labgo.agent import DEFAULT_MODEL, run_agent
+    from labgo.hybrid import aggregate_scores
+
+    manifest, cases = load_benchmark(bench_dir)
+    # Deterministic sample selection, not a security use — S311 doesn't apply.
+    sample = _random.Random(sample_seed).sample(cases, k=min(n, len(cases)))  # noqa: S311
+
+    driver = connect(uri, user, password)
+    scores = []
+    transcript = []
+    total_in = total_out = total_turns = 0
+    try:
+        for case in sample:
+            result = run_agent(
+                driver,
+                repo,
+                case.seed,
+                model=model or DEFAULT_MODEL,
+                max_turns=max_turns,
+                api_key=api_key,
+            )
+            scores.append(
+                CaseScore(
+                    seed=case.seed, expected=set(case.expected), predicted=result.predicted_files
+                )
+            )
+            total_in += result.input_tokens
+            total_out += result.output_tokens
+            total_turns += result.turns
+            transcript.append({"case": case.to_dict(), "agent": result.to_dict()})
+            console.print(f"  [dim]scored[/dim] {case.seed} ({len(scores)}/{len(sample)})")
+    finally:
+        driver.close()
+
+    agg_params = {"model": model or DEFAULT_MODEL, "max_turns": max_turns, "n": len(sample)}
+    agg = aggregate_scores(scores, method="agent", params=agg_params)
+    t = Table(
+        title=f"Agent eval — '{manifest['name']}' (n={len(sample)}/{len(cases)})",
+        show_header=False,
+        title_style="bold",
+    )
+    t.add_row("cases scored", f"{agg.n_cases:,}")
+    t.add_row("mean recall", f"[bold]{agg.recall_mean:.1%}[/bold]")
+    t.add_row("mean precision", f"{agg.precision_mean:.1%}")
+    t.add_row("hit rate (recall > 0)", f"{agg.hit_rate:.1%}")
+    t.add_row("empty predictions", f"{agg.empty_predictions:,}")
+    t.add_row("", "")
+    t.add_row("total tokens", f"{total_in:,} in / {total_out:,} out")
+    t.add_row("mean turns/case", f"{total_turns / len(sample):.1f}")
+    console.print(t)
+    console.print(
+        "\n[dim]Compare against the deterministic floor: 43.3% recall / 15.4% precision, "
+        "no LLM, no per-call cost (D015). Record the result in DECISIONS.md.[/dim]"
+    )
+
+    if out:
+        _write(
+            out,
+            {
+                "aggregate": agg.to_dict(),
+                "totals": {"input_tokens": total_in, "output_tokens": total_out},
+                "transcript": transcript,
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -611,6 +611,67 @@ constraint**. It may not be; the bottleneck visible in every number so far is re
 
 ---
 
+## D016 — Stage 4: the agent doesn't beat the deterministic baseline yet, and the reason is legible
+**Date:** 2026-08-06 · **Status:** accepted — measured, not flattering, diagnosed rather than hidden
+
+Stage 4 (`agent.py`) is a LangGraph tool-calling loop: an LLM (Haiku 4.5) chooses among
+five tools — `call_graph_traverse`, `co_change_neighbors`, `semantic_search` (all thin
+wrappers over what Stages 2/3 already measure) plus two new ones, `test_coverage` and
+`likely_reviewer`, the "which tests" and "who reviews" halves of README's opening
+question that nothing before this stage answered. The graph is `agent ⇄ tools` with a
+`finalize` escape hatch at `max_turns` (forces a tools-disabled final call, guaranteeing
+termination) — LangGraph for orchestration, the raw `anthropic` SDK for the model call,
+no `langchain_anthropic`/`create_react_agent` (README's "LangChain used thinly" stance;
+a prebuilt agent loop would hide exactly the routing behaviour this stage exists to
+check, D001).
+
+**Measured on httpx, `labgo agent-eval benchmarks/httpx --n 40 --max-turns 6`** (Haiku
+4.5, sample of 40/236 cases — the full benchmark through a multi-turn LLM loop is real
+time and real tokens, so the sample size is a disclosed choice, same honesty standard as
+D003/D008's filtering, not a shortcut hidden from the number; `--sample-seed 42` makes it
+reproducible):
+
+| | recall | precision | hit rate | mean predicted size |
+|---|---|---|---|---|
+| call-graph only (floor) | 22.4% | 12.2% | 28.8% | 4.8 |
+| hybrid + cochange, matched budget (D015 follow-up, citable) | 43.3% | 15.4% | 57.2% | 8.3 |
+| **Stage 4 agent (n=40)** | **30.3%** | **5.8%** | **45.0%** | **13.05** |
+
+**The agent does not beat the deterministic baseline.** Recall (30.3%) lands between the
+floor and the tuned hybrid — reasonable — but precision (5.8%) is *worse than the
+call-graph floor's own precision* (12.2%), let alone the hybrid+cochange's 15.4%. Cost:
+429,839 input / 38,534 output tokens for 40 cases (≈11.7K tokens/case, mean 3.05 turns) —
+cheap on Haiku in absolute terms, but currently buys a worse answer than the free
+deterministic baseline. By D001's own standard — *does the added complexity earn its
+place* — the honest answer right now is no.
+
+**Diagnosed, not just reported (the same discipline D012/D015 already paid for).** Mean
+predicted size is 13.05 files/case — 57% larger than the hybrid+cochange's own 8.3-file
+budget, and nearly 3x the call-graph floor's 4.8. Every deterministic method has an
+explicit, tunable size cap (`hops`, `k`, `min_count`); the agent has none — the system
+prompt describes the tools' tradeoffs but never asks for a bounded final answer, so it
+lists everything gathered across tool calls (`co_change_neighbors` called 51 times over
+40 cases — often more than once per case, exploring several `min_count` values) without
+self-imposed discipline about the final set size. **This is not a reasoning failure, it's
+an uncalibrated budget** — structurally the same lesson as D015's first (wrong) 75.5%
+vector number and D012's 40.5-file leak-free-but-unbounded combined predictor: an
+otherwise-plausible number produced by predicting too much, not by finding more.
+
+**Minor, secondary finding:** 3/40 cases had a stray `**` (markdown bold) leak into the
+`IMPACTED_FILES:` line despite the "plain text, not JSON" instruction.
+`parse_impacted_files()` correctly dropped the malformed entry as unrecognized rather
+than mis-scoring it (`AgentResult.unrecognized_mentions` — module docstring's stated
+design), so this cost a little recall on 3 cases but never corrupted a score.
+
+**Not yet done — the obvious next fix, named rather than silently deferred:** apply
+D015's matched-budget standard to the agent itself — instruct it to return its best *N*
+files, ranked, and compare against the deterministic baselines at the same N. Until that
+measurement exists, "the agent doesn't beat the baseline" is the citable number, and
+"because it isn't budget-constrained" is the citable reason, not "LLMs aren't good at
+this" — those are different claims, and only the first one has evidence behind it here.
+
+---
+
 ## Template
 
 ```

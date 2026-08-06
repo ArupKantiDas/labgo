@@ -34,8 +34,8 @@ choice (see [`DECISIONS.md`](DECISIONS.md)):
 | 2 | Neo4j loader + **deterministic Cypher baseline, measured** | ✅ done |
 | 3a | Vector index (Voyage embeddings over Function/Class source, D014) | ✅ done |
 | 3b | Vector-only recall measured + naive hybrid (call-graph ∪ vectors), D015 | ✅ done |
-| 4 | LangGraph multi-agent workflow | next |
-| 5 | MCP server — query it from Claude Code | |
+| 4 | LangGraph agent — **measured, doesn't beat the baseline yet**, D016 | ✅ done |
+| 5 | MCP server — query it from Claude Code | next |
 | 6 | Observability (traces, cost/latency) + eval suite in CI | |
 
 **Stage 2 is the one that matters.** A deterministic baseline, scored before any LLM is
@@ -136,6 +136,33 @@ the union (vs. the current plain set union) stays deliberately unbuilt — no me
 yet shows the naive union is the bottleneck, the same "don't build it until proven
 necessary" call D004 made about type inference.
 
+## Stage 4: LangGraph agent
+
+```bash
+uv sync --extra agents                                  # langgraph + anthropic
+uv run labgo agent "httpx/_client.py" ../labgo-corpora/httpx     # ask one question
+uv run labgo agent-eval benchmarks/httpx ../labgo-corpora/httpx \
+  --n 40 --sample-seed 42                                # score against a sample (real $)
+```
+
+The first stage where an LLM decides anything. A LangGraph loop (`agent ⇄ tools`, raw
+`anthropic` SDK for the model call — no `langchain_anthropic`/`create_react_agent`, so the
+routing decision stays visible instead of hidden inside a prebuilt agent) picks among five
+tools: the three retrieval signals every earlier stage already measured
+(`call_graph_traverse`, `co_change_neighbors`, `semantic_search`) plus two new ones this
+stage adds — `test_coverage` and `likely_reviewer`, the "which tests" and "who reviews"
+halves of this README's opening question that nothing before Stage 4 answered.
+
+**Measured on httpx (n=40/236 sample, Haiku 4.5): 30.3% recall / 5.8% precision — the
+agent does not beat the deterministic baseline.** Recall lands between the call-graph
+floor (22.4%) and the tuned hybrid+cochange (43.3%), but precision is *worse than the
+floor's own* (12.2%), because the agent predicts 13.05 files/case on average — 57% larger
+than the hybrid+cochange's own 8.3-file budget, with no self-imposed size cap the way
+`hops`/`k`/`min_count` bound every deterministic method. Same category of mistake D012 and
+D015 already paid for once each: a plausible number produced by predicting too much, not
+by finding more. Full diagnosis, cost (≈11.7K tokens/case), and the matched-budget fix
+this motivates are in D016 — not yet built, named rather than silently deferred.
+
 ## Impact viewer
 
 `labgo view` serves an interactive graph of whatever you just ingested — point it at
@@ -175,6 +202,8 @@ Baseline    22.4% mean recall · 28.8% hit rate (call-graph only, 236-case bench
 Vectors     1,229 Function/Class nodes embedded (voyage-code-3) · 162,884 tokens billed
 Retrieval   calls 22.4% · vectors 19.3% (matched ~4-file budget) · hybrid 40.1% (D015)
             hybrid + cochange (min_count=25): 43.3% recall · 15.4% precision (D015 follow-up)
+Agent       30.3% recall · 5.8% precision (n=40 sample, Haiku 4.5) -- doesn't beat the
+            deterministic baseline; predicts 13.05 files/case, no budget cap (D016)
 ```
 
 The 27.2% is deliberately reported rather than massaged. The residual is diagnosed —
@@ -209,7 +238,9 @@ src/labgo/
   baseline.py   deterministic Cypher impact prediction + scoring (no LLM)
   embed.py      Voyage embeddings over Function/Class source + Neo4j vector index (D014)
   hybrid.py     vector-only + hybrid impact prediction, scored the same way (D015)
-  cli.py        ingest / history / benchmark / verify / load / baseline / embed / search / view
+  agent.py      LangGraph tool-calling agent -- measured, doesn't beat the baseline yet (D016)
+  cli.py        ingest / history / benchmark / verify / load / baseline / embed / search /
+                view / agent / agent-eval
 viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
 docs/file-map.html   file-by-file explainer + data flow diagram
 docker-compose.yml   local Neo4j, community edition

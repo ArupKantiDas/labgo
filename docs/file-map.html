@@ -258,16 +258,16 @@
       <div class="stage-stat">40.1% recall<br>D015</div>
     </div>
     <span class="stage-arrow">›</span>
-    <div class="stage-card next">
-      <div class="stage-num">4</div>
-      <div class="stage-name">LangGraph agents</div>
-      <div class="stage-stat">next</div>
+    <div class="stage-card done">
+      <div class="stage-num">✓ 4</div>
+      <div class="stage-name">LangGraph agent</div>
+      <div class="stage-stat">30.3% recall<br>doesn't beat floor · D016</div>
     </div>
     <span class="stage-arrow">›</span>
     <div class="stage-card next">
       <div class="stage-num">5</div>
       <div class="stage-name">MCP server</div>
-      <div class="stage-stat">—</div>
+      <div class="stage-stat">next</div>
     </div>
     <span class="stage-arrow">›</span>
     <div class="stage-card next">
@@ -359,6 +359,81 @@
       that shrinks as <code>k</code> grows (D015 follow-up). The union stays a plain set
       union throughout — no weighting or ranking; deliberately deferred until a measurement
       shows it's the bottleneck, not assumed.
+    </figcaption>
+  </figure>
+
+  <figure>
+    <div class="diagram-scroll">
+      <svg class="dfd" viewBox="0 0 640 354" role="img"
+           aria-label="Bar chart comparing the call-graph-only floor, the tuned deterministic hybrid-plus-cochange baseline, and the Stage 4 LangGraph agent. Call-graph floor: 22.4% recall, 12.2% precision, mean predicted size 4.8 files. Hybrid plus cochange, matched budget: 43.3% recall, 15.4% precision, mean size 8.3 files, highest on both measures. Agent, sampled 40 of 236 cases: 30.3% recall, 5.8% precision, mean size 13.05 files -- worse precision than even the floor, because its predicted size is uncapped and far exceeds either deterministic method's budget.">
+        <!-- highlight band behind the still-best group: hybrid+cochange -->
+        <rect x="294" y="64" width="90" height="230" rx="6" class="highlight-band" fill-opacity="0.6"></rect>
+
+        <!-- gridlines -->
+        <line x1="60" y1="294" x2="620" y2="294" class="grid"></line>
+        <line x1="60" y1="236.5" x2="620" y2="236.5" class="grid"></line>
+        <line x1="60" y1="179" x2="620" y2="179" class="grid"></line>
+        <line x1="60" y1="121.5" x2="620" y2="121.5" class="grid"></line>
+        <line x1="60" y1="64" x2="620" y2="64" class="grid"></line>
+        <text x="52" y="297" text-anchor="end" font-size="10" class="sub">0%</text>
+        <text x="52" y="239.5" text-anchor="end" font-size="10" class="sub">25%</text>
+        <text x="52" y="182" text-anchor="end" font-size="10" class="sub">50%</text>
+        <text x="52" y="124.5" text-anchor="end" font-size="10" class="sub">75%</text>
+        <text x="52" y="67" text-anchor="end" font-size="10" class="sub">100%</text>
+
+        <text x="60" y="20" font-size="13" font-weight="700">Deterministic baseline vs. agent — mismatched budgets (D016)</text>
+        <circle cx="430" cy="38" r="5" class="bar-recall"></circle>
+        <text x="440" y="42" font-size="11">Recall</text>
+        <circle cx="530" cy="38" r="5" class="bar-precision"></circle>
+        <text x="540" y="42" font-size="11">Precision</text>
+
+        <!-- calls-only floor: recall 22.4%, precision 12.2%, mean size 4.8 -->
+        <rect x="120.3" y="242.5" width="24" height="51.5" rx="4" class="bar-recall"></rect>
+        <rect x="120.3" y="290" width="24" height="4" class="bar-recall"></rect>
+        <text x="132.3" y="236.5" text-anchor="middle" font-size="11" font-weight="700">22.4%</text>
+        <rect x="162.3" y="265.9" width="24" height="28.1" rx="4" class="bar-precision"></rect>
+        <rect x="162.3" y="290" width="24" height="4" class="bar-precision"></rect>
+        <text x="174.3" y="259.9" text-anchor="middle" font-size="11" font-weight="700">12.2%</text>
+        <text x="153.3" y="312" text-anchor="middle" font-size="12" font-weight="600">calls floor</text>
+        <text x="153.3" y="325" text-anchor="middle" font-size="9.5" class="sub">4.8 files/case</text>
+
+        <!-- hybrid+cochange, matched budget: recall 43.3%, precision 15.4%, mean size 8.3 -->
+        <rect x="307" y="194.4" width="24" height="99.6" rx="4" class="bar-recall"></rect>
+        <rect x="307" y="290" width="24" height="4" class="bar-recall"></rect>
+        <text x="319" y="188.4" text-anchor="middle" font-size="11" font-weight="700">43.3%</text>
+        <rect x="349" y="258.6" width="24" height="35.4" rx="4" class="bar-precision"></rect>
+        <rect x="349" y="290" width="24" height="4" class="bar-precision"></rect>
+        <text x="361" y="252.6" text-anchor="middle" font-size="11" font-weight="700">15.4%</text>
+        <text x="340" y="312" text-anchor="middle" font-size="12" font-weight="600">hybrid+cc</text>
+        <text x="340" y="325" text-anchor="middle" font-size="9.5" class="sub">8.3 files/case</text>
+
+        <!-- agent, n=40: recall 30.3%, precision 5.8%, mean size 13.05 -->
+        <rect x="493.7" y="224.3" width="24" height="69.7" rx="4" class="bar-recall"></rect>
+        <rect x="493.7" y="290" width="24" height="4" class="bar-recall"></rect>
+        <text x="505.7" y="218.3" text-anchor="middle" font-size="11" font-weight="700">30.3%</text>
+        <rect x="535.7" y="280.7" width="24" height="13.3" rx="4" class="bar-precision"></rect>
+        <rect x="535.7" y="290" width="24" height="4" class="bar-precision"></rect>
+        <text x="547.7" y="274.7" text-anchor="middle" font-size="11" font-weight="700">5.8%</text>
+        <text x="526.7" y="312" text-anchor="middle" font-size="12" font-weight="600">agent</text>
+        <text x="526.7" y="325" text-anchor="middle" font-size="9.5" class="sub">13.05 files/case, n=40</text>
+      </svg>
+    </div>
+    <figcaption>
+      Not a matched-budget comparison — that's the point. <b>hybrid+cochange</b>
+      (highlighted, still the best result in the project) predicts a disciplined 8.3
+      files/case because every deterministic method has an explicit size knob
+      (<code>hops</code>/<code>k</code>/<code>min_count</code>). The Stage 4 <b>agent</b>
+      has no such knob: its system prompt describes the tools' tradeoffs but never asks
+      for a bounded final answer, so it predicts <b>13.05 files/case</b> — 57% larger than
+      the deterministic budget — and its precision (5.8%) falls <em>below even the
+      call-graph floor's own</em> (12.2%), despite reasonable recall (30.3%, between the
+      floor and the tuned hybrid). D016's diagnosis: this is the same category of mistake
+      D012 and D015 each caught once — a plausible number produced by predicting too much
+      — not evidence that the agent's reasoning about individual files is worse than the
+      deterministic signals it has direct access to. Sampled 40/236 cases (Haiku 4.5,
+      disclosed, reproducible via <code>--sample-seed 42</code>); the matched-budget
+      version of this comparison (ask the agent for its best <em>N</em> files, ranked) is
+      named as the next fix in D016, not yet built.
     </figcaption>
   </figure>
 
@@ -531,7 +606,7 @@
   <div class="filegroup">
     <div class="file">
       <div class="path">cli.py</div>
-      <div class="desc">The entry point. Nine Typer commands. Stage 1, no database or LLM:
+      <div class="desc">The entry point. Eleven Typer commands. Stage 1, no database or LLM:
       <code>ingest</code> (repo → code graph), <code>history</code> (repo → raw co-change +
       eval set), <code>benchmark</code> (repo → pinned, filtered exam), <code>verify</code>
       (does a repo still match a pinned benchmark?). Stage 2, Neo4j: <code>load</code>
@@ -540,14 +615,20 @@
       the default, is the unchanged Stage 2 path; <code>vectors</code>/<code>hybrid</code>
       route to <code>hybrid.py</code>, Stage 3b, D015). Stage 3a, +Voyage: <code>embed</code>
       and <code>search</code> — both import <code>labgo.embed</code> lazily inside the
-      command body (<code>PLC0415</code> ignored, deliberately) so the other seven commands
+      command body (<code>PLC0415</code> ignored, deliberately) so the other commands
       keep working without the <code>vectors</code> extra installed;
       <code>labgo.hybrid</code> has no such dependency, so it's imported normally at the top.
-      <code>view</code> is the odd one out — no repo argument, only <code>--data</code>: a
-      <code>ThreadingHTTPServer</code> serves the prebuilt <code>viewer/dist/</code> bundle,
-      with <code>_view_handler()</code> intercepting <code>/graph.json</code> and
-      <code>/cochange.json</code> to route them to whatever's on disk right now, so the
-      committed bundle never serves a graph baked in at someone else's build time.</div>
+      Stage 4, +Anthropic/LangGraph: <code>agent</code> (ask one impact question, interactive)
+      and <code>agent-eval</code> (score the agent against a <em>sample</em> of a pinned
+      benchmark — the full 236 cases through a multi-turn LLM loop is real money and time,
+      so the sample size is a disclosed, deterministic choice, not a shortcut hidden from
+      the number). Both lazily import <code>labgo.agent</code>, same reasoning as
+      <code>embed</code>/<code>search</code>. <code>view</code> is the odd one out — no repo
+      argument, only <code>--data</code>: a <code>ThreadingHTTPServer</code> serves the
+      prebuilt <code>viewer/dist/</code> bundle, with <code>_view_handler()</code>
+      intercepting <code>/graph.json</code> and <code>/cochange.json</code> to route them to
+      whatever's on disk right now, so the committed bundle never serves a graph baked in at
+      someone else's build time.</div>
     </div>
     <div class="file">
       <div class="path">ingest/pyast.py</div>
@@ -665,6 +746,37 @@
       leakage D012 caught, though it shrinks as <code>k</code> grows since a wide vector
       net starts catching the same hits on its own. Ranking the union stays unbuilt on
       purpose — no measurement yet shows the plain union is the bottleneck.</div>
+    </div>
+    <div class="file">
+      <div class="path">agent.py</div>
+      <div class="desc">Stage 4: the first stage where an LLM decides anything — a
+      LangGraph tool-calling loop answering "if I change X, what breaks, which tests must
+      run, and who should review it?" (README's opening question, in full, for the first
+      time). Five tools: <code>call_graph_traverse</code> and <code>co_change_neighbors</code>
+      wrap what <code>baseline.py</code>/<code>graph.py</code> already measure,
+      <code>semantic_search</code> wraps <code>embed.py</code>, and two are new —
+      <code>test_coverage</code> (walks <code>TESTS</code> edges) and
+      <code>likely_reviewer</code> (most frequent historical committer, plain
+      <code>git log</code>, no graph). State carries Anthropic's own message/tool-use JSON
+      unchanged — no <code>langchain_core</code> message type, no
+      <code>create_react_agent</code>: the graph is <code>agent ⇄ tools</code> with a
+      conditional edge, so the routing decision that is this stage's actual point
+      (D001) stays visible instead of hidden inside a prebuilt loop. A <code>finalize</code>
+      node (tools disabled) is the escape hatch at <code>max_turns</code>, guaranteeing
+      termination in a fixed number of turns rather than hoping the model stops calling
+      tools on its own. The system prompt lists every file id in the corpus so predictions
+      are scored on reasoning, not on inventing correctly-spelled paths;
+      <code>parse_impacted_files()</code> drops anything unrecognized rather than guessing,
+      and keeps the drop visible on <code>AgentResult.unrecognized_mentions</code> instead
+      of silently discarding it.
+      <b>Measured on httpx (n=40/236 sample, Haiku 4.5, D016): 30.3% recall / 5.8%
+      precision — does not beat the 43.3% / 15.4% deterministic hybrid+cochange floor.</b>
+      Diagnosed, not just reported: mean predicted size is 13.05 files/case, 57% larger
+      than the deterministic baseline's own matched budget — every deterministic method
+      has an explicit size cap (<code>hops</code>/<code>k</code>/<code>min_count</code>),
+      the agent has none, so it lists everything it gathered rather than committing to a
+      budget. Same category of mistake D012 and D015 each paid for once: a plausible
+      number produced by predicting too much.</div>
     </div>
     <div class="file">
       <div class="path">__init__.py <span class="dim">(×2, empty)</span></div>
@@ -786,6 +898,18 @@
       tested here, matching how <code>baseline.py</code>'s own
       <code>predict_impact</code> isn't either; both were instead checked directly against
       Aura while diagnosing D015's inflated-prediction bug.</div>
+    </div>
+    <div class="file">
+      <div class="path">tests/test_agent.py</div>
+      <div class="desc">The pure-Python slice of <code>agent.py</code>, no live Anthropic or
+      Neo4j: <code>parse_impacted_files()</code> keeps recognized file ids and drops
+      unrecognized ones without crashing (including a model that ignores the format
+      entirely), and <code>_route_after_agent()</code> — the loop's actual routing logic —
+      continues to <code>tools</code> under the turn cap, forces <code>finalize</code> at
+      it, and ends once the model stops calling tools on its own. A hallucinated tool name
+      dispatches to an error payload, not an exception. The tool-calling loop itself was
+      exercised directly against Aura, same testing philosophy as
+      <code>baseline.predict_impact</code> / <code>hybrid.predict_impact_vector</code>.</div>
     </div>
   </div>
 
