@@ -213,11 +213,13 @@ your own repo, not just httpx. Two modes:
   any node.
 - **Impact** — pick a file or function and see what would be affected by changing it,
   *before* you change it: everything that calls it (or calls its callers — hop depth is
-  adjustable), plus files that have historically changed alongside it in git history. The
-  two signals are deliberately separate, for the same reason the project measures retrieval
-  and generation separately (see [`WHY.md`](WHY.md)) — static call resolution is only 27%
-  complete on httpx (D004), so co-change evidence catches real coupling the call graph
-  misses.
+  adjustable), plus files that have historically changed alongside it in git history (co-
+  change strength is adjustable too — drag toward 25 for the clean, budget-matched signal
+  D010 found; low thresholds pull in most of the corpus, same as scoring it that way would).
+  The two signals are deliberately separate, for the same reason the project measures
+  retrieval and generation separately (see [`WHY.md`](WHY.md)) — static call resolution is
+  only 27% complete on httpx (D004), so co-change evidence catches real coupling the call
+  graph misses.
 
 The viewer ships prebuilt in `viewer/dist/`, so `labgo view` needs no Node at runtime —
 only `data/graph.json` (from `ingest`) and, optionally, `data/cochange.json` (from

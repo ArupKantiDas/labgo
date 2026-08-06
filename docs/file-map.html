@@ -854,7 +854,12 @@
       a node and a BFS walks the <em>reverse</em> <code>CALLS</code> adjacency (callee → caller,
       the "what breaks if I change this" direction) out to an adjustable hop depth, colored by
       hop distance, plus separately-highlighted co-change neighbors from
-      <code>cochange.json</code>. Camera auto-fits to whatever's currently in frame via
+      <code>cochange.json</code> — also threshold-adjustable now (a "Co-change ≥" slider next
+      to Hops, min pinned at 2 since that's <code>cochange.json</code>'s own baked-in floor,
+      max computed from whatever count actually appears in the loaded data). A hint nudges
+      toward ≥25 below that, citing D010's matched-budget finding directly in the UI — low
+      thresholds visibly pull in most of the corpus, the same thing that made the default
+      unfit for scoring. Camera auto-fits to whatever's currently in frame via
       <code>zoomToFit</code>, clamped to a min/max zoom so a single isolated node doesn't fill
       the screen.</div>
     </div>

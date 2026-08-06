@@ -82,6 +82,7 @@ export default function App() {
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("explore");
   const [hops, setHops] = useState(3);
+  const [minCochangeCount, setMinCochangeCount] = useState(2);
   const [dims, setDims] = useState(() => ({
     width: Math.max(320, window.innerWidth - 380),
     height: window.innerHeight,
@@ -324,19 +325,27 @@ export default function App() {
     return selectedNode.kind === "File" ? selectedNode.id : selectedNode.path;
   }, [selectedNode]);
 
+  // Highest count actually present, so the slider's range reflects real data
+  // rather than a guess — a floor of 2 keeps it valid even with no history yet.
+  const maxCochangeCount = useMemo(
+    () => cochange.reduce((max, e) => Math.max(max, e.count), 2),
+    [cochange],
+  );
+
   const cochangeForSelected = useMemo(() => {
     if (mode !== "impact" || !selectedFilePath) return [];
     const seen = new Map<string, number>();
     combinedEdges.forEach((e) => {
       if (e.kind !== "CO_CHANGED") return;
       const count = (e.props?.count as number | undefined) ?? 0;
+      if (count < minCochangeCount) return;
       if (e.source === selectedFilePath) seen.set(e.target, count);
       else if (e.target === selectedFilePath) seen.set(e.source, count);
     });
     return [...seen.entries()]
       .map(([id, count]) => ({ id, count }))
       .sort((a, b) => b.count - a.count);
-  }, [mode, selectedFilePath, combinedEdges]);
+  }, [mode, selectedFilePath, combinedEdges, minCochangeCount]);
 
   const cochangeIdSet = useMemo(() => new Set(cochangeForSelected.map((c) => c.id)), [
     cochangeForSelected,
@@ -442,7 +451,11 @@ export default function App() {
         const s = linkEndpointId(link.source);
         const t = linkEndpointId(link.target);
         if (l.kind === "CALLS" && impact?.has(s) && impact?.has(t)) return base;
-        if (l.kind === "CO_CHANGED" && (s === selectedFilePath || t === selectedFilePath)) {
+        if (
+          l.kind === "CO_CHANGED" &&
+          (s === selectedFilePath || t === selectedFilePath) &&
+          cochangeIdSet.has(s === selectedFilePath ? t : s)
+        ) {
           return IMPACT_COCHANGE_COLOR;
         }
         return hexToRgba(base, 0.04);
@@ -453,7 +466,7 @@ export default function App() {
       }
       return hexToRgba(base, 0.45);
     },
-    [mode, selectedId, impact, selectedFilePath, focusId],
+    [mode, selectedId, impact, selectedFilePath, focusId, cochangeIdSet],
   );
 
   const linkWidth = useCallback(
@@ -464,7 +477,11 @@ export default function App() {
         const s = linkEndpointId(link.source);
         const t = linkEndpointId(link.target);
         if (l.kind === "CALLS" && impact?.has(s) && impact?.has(t)) return 1.8;
-        if (l.kind === "CO_CHANGED" && (s === selectedFilePath || t === selectedFilePath)) {
+        if (
+          l.kind === "CO_CHANGED" &&
+          (s === selectedFilePath || t === selectedFilePath) &&
+          cochangeIdSet.has(s === selectedFilePath ? t : s)
+        ) {
           const count = (l.props?.count as number | undefined) ?? 1;
           return Math.min(4, 1 + Math.log2(count));
         }
@@ -474,7 +491,7 @@ export default function App() {
       const touches = linkEndpointId(link.source) === focusId || linkEndpointId(link.target) === focusId;
       return touches ? 1.8 : 0.4;
     },
-    [mode, selectedId, impact, selectedFilePath, focusId],
+    [mode, selectedId, impact, selectedFilePath, focusId, cochangeIdSet],
   );
 
   const nodeCanvasObject = useCallback(
@@ -598,6 +615,24 @@ export default function App() {
               <span className="hop-value">{hops}</span>
             </label>
 
+            <label className="hop-control">
+              Co-change ≥
+              <input
+                type="range"
+                min={2}
+                max={maxCochangeCount}
+                value={minCochangeCount}
+                onChange={(e) => setMinCochangeCount(Number(e.target.value))}
+              />
+              <span className="hop-value">{minCochangeCount}×</span>
+            </label>
+            {minCochangeCount < 20 && (
+              <p className="hint">
+                Low thresholds pull in most of the corpus — try ≥25 for the cleanest signal,
+                matched to the call-graph's own budget (D010).
+              </p>
+            )}
+
             <p className="impact-summary">
               <strong>{impactCallers.length}</strong>{" "}
               {impactCallers.length === 1 ? "caller" : "callers"} across{" "}
@@ -634,8 +669,8 @@ export default function App() {
             <h3>Changed together historically</h3>
             {cochangeForSelected.length === 0 ? (
               <p className="hint">
-                No co-change evidence for this file — either it's unrelated, or{" "}
-                <code>labgo history</code> hasn't been run.
+                No co-change evidence for this file at this threshold — either it's unrelated,{" "}
+                <code>labgo history</code> hasn't been run, or try lowering "Co-change ≥" above.
               </p>
             ) : (
               <ul className="impact-list">
