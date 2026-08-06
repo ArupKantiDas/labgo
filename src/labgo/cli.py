@@ -596,5 +596,29 @@ def agent_eval(
         )
 
 
+@app.command()
+def mcp(
+    repo: Path = typer.Argument(..., help="Corpus repo — read for git log (likely_reviewer)"),
+    uri: str = typer.Option(None, "--uri"),
+    user: str = typer.Option(None, "--user"),
+    password: str = typer.Option(None, "--password"),
+) -> None:
+    """Serve the graph over MCP (stdio) — Stage 5. Same five tools as `labgo agent`.
+
+    Opposite direction of control from `agent`/`agent-eval`: there, an LLM this project
+    drives calls these tools; here, this project's tools are offered to *any* MCP
+    client's own model (Claude Code, Claude Desktop, ...) to call instead. Point a
+    client's MCP config at `labgo mcp <repo>` (stdio transport) to use it.
+    """
+    from labgo.mcp_server import build_server
+
+    driver = connect(uri, user, password)
+    try:
+        server = build_server(driver, repo)
+        server.run(transport="stdio")
+    finally:
+        driver.close()
+
+
 if __name__ == "__main__":
     app()

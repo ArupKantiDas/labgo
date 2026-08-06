@@ -35,8 +35,8 @@ choice (see [`DECISIONS.md`](DECISIONS.md)):
 | 3a | Vector index (Voyage embeddings over Function/Class source, D014) | ✅ done |
 | 3b | Vector-only recall measured + naive hybrid (call-graph ∪ vectors), D015 | ✅ done |
 | 4 | LangGraph agent — **measured, doesn't beat the baseline yet**, D016 | ✅ done |
-| 5 | MCP server — query it from Claude Code | next |
-| 6 | Observability (traces, cost/latency) + eval suite in CI | |
+| 5 | MCP server — query it from Claude Code | ✅ done |
+| 6 | Observability (traces, cost/latency) + eval suite in CI | next |
 
 **Stage 2 is the one that matters.** A deterministic baseline, scored before any LLM is
 added, is what proves the agents earned their place. Skipping it means never being able to
@@ -163,6 +163,24 @@ D015 already paid for once each: a plausible number produced by predicting too m
 by finding more. Full diagnosis, cost (≈11.7K tokens/case), and the matched-budget fix
 this motivates are in D016 — not yet built, named rather than silently deferred.
 
+## Stage 5: MCP server
+
+```bash
+uv sync --extra mcp
+uv run labgo mcp ../labgo-corpora/httpx    # stdio transport
+```
+
+The opposite direction of control from Stage 4: there, an LLM this project drives calls
+these tools; here, this project's tools are offered to *any* MCP client's own model
+(Claude Code, Claude Desktop, or anything else that speaks the protocol) to call instead.
+`mcp_server.py` owns no logic of its own — it's thin wiring around the same five
+functions `agent.py` built (`tool_call_graph`, `tool_co_change`, `tool_semantic_search`,
+`tool_test_coverage`, `tool_likely_reviewer`), plus a `labgo://files` resource exposing
+every file id in the corpus (the same grounding context `agent.py`'s system prompt gives
+the LangGraph loop). Verified against a real client over the actual stdio JSON-RPC
+protocol — handshake, tool listing, tool calls, resource reads — not just calling the
+server object's methods directly.
+
 ## Impact viewer
 
 `labgo view` serves an interactive graph of whatever you just ingested — point it at
@@ -239,8 +257,9 @@ src/labgo/
   embed.py      Voyage embeddings over Function/Class source + Neo4j vector index (D014)
   hybrid.py     vector-only + hybrid impact prediction, scored the same way (D015)
   agent.py      LangGraph tool-calling agent -- measured, doesn't beat the baseline yet (D016)
+  mcp_server.py MCP server (stdio) -- thin wiring around agent.py's tool functions
   cli.py        ingest / history / benchmark / verify / load / baseline / embed / search /
-                view / agent / agent-eval
+                view / agent / agent-eval / mcp
 viewer/         React + force-graph impact viewer (dist/ committed, served by `labgo view`)
 docs/file-map.html   file-by-file explainer + data flow diagram
 docker-compose.yml   local Neo4j, community edition

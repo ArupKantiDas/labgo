@@ -264,16 +264,16 @@
       <div class="stage-stat">30.3% recall<br>doesn't beat floor · D016</div>
     </div>
     <span class="stage-arrow">›</span>
-    <div class="stage-card next">
-      <div class="stage-num">5</div>
+    <div class="stage-card done">
+      <div class="stage-num">✓ 5</div>
       <div class="stage-name">MCP server</div>
-      <div class="stage-stat">next</div>
+      <div class="stage-stat">5 tools · stdio<br>verified w/ real client</div>
     </div>
     <span class="stage-arrow">›</span>
     <div class="stage-card next">
       <div class="stage-num">6</div>
       <div class="stage-name">Observability + CI eval</div>
-      <div class="stage-stat">—</div>
+      <div class="stage-stat">next</div>
     </div>
   </div>
 
@@ -606,7 +606,7 @@
   <div class="filegroup">
     <div class="file">
       <div class="path">cli.py</div>
-      <div class="desc">The entry point. Eleven Typer commands. Stage 1, no database or LLM:
+      <div class="desc">The entry point. Twelve Typer commands. Stage 1, no database or LLM:
       <code>ingest</code> (repo → code graph), <code>history</code> (repo → raw co-change +
       eval set), <code>benchmark</code> (repo → pinned, filtered exam), <code>verify</code>
       (does a repo still match a pinned benchmark?). Stage 2, Neo4j: <code>load</code>
@@ -622,7 +622,10 @@
       and <code>agent-eval</code> (score the agent against a <em>sample</em> of a pinned
       benchmark — the full 236 cases through a multi-turn LLM loop is real money and time,
       so the sample size is a disclosed, deterministic choice, not a shortcut hidden from
-      the number). Both lazily import <code>labgo.agent</code>, same reasoning as
+      the number). Stage 5, +mcp: <code>mcp</code> serves the same five tools over the
+      Model Context Protocol (stdio) instead of driving them itself — opposite direction
+      of control from <code>agent</code>. All three lazily import their extras
+      (<code>labgo.agent</code>, <code>labgo.mcp_server</code>), same reasoning as
       <code>embed</code>/<code>search</code>. <code>view</code> is the odd one out — no repo
       argument, only <code>--data</code>: a <code>ThreadingHTTPServer</code> serves the
       prebuilt <code>viewer/dist/</code> bundle, with <code>_view_handler()</code>
@@ -777,6 +780,27 @@
       the agent has none, so it lists everything it gathered rather than committing to a
       budget. Same category of mistake D012 and D015 each paid for once: a plausible
       number produced by predicting too much.</div>
+    </div>
+    <div class="file">
+      <div class="path">mcp_server.py</div>
+      <div class="desc">Stage 5: the same five tools, opposite direction of control.
+      Where <code>agent.py</code> puts an LLM inside this project deciding which tool to
+      call, <code>mcp_server.py</code> puts this project's tools inside <em>any</em> MCP
+      client's own model — Claude Code, Claude Desktop, anything that speaks the
+      protocol. Owns no logic of its own: <code>build_server()</code> wires
+      <code>MCPServer.tool()</code> decorators around <code>agent.py</code>'s
+      <code>tool_call_graph</code> / <code>tool_co_change</code> /
+      <code>tool_semantic_search</code> / <code>tool_test_coverage</code> /
+      <code>tool_likely_reviewer</code> — promoted off their old <code>_tool_*</code>
+      private names specifically for this reuse, two callers sharing one implementation
+      rather than two copies drifting apart. A <code>labgo://files</code>
+      <b>resource</b> (not a tool — static context a client reads once, not an action to
+      invoke repeatedly) exposes every file id, the same grounding
+      <code>agent.py</code>'s system prompt gives the LangGraph loop. Connects to Neo4j
+      once at process startup, not per-call like every other CLI command — an MCP server
+      is a long-lived stdio process, not a one-shot invocation. Verified against a real
+      <code>mcp.ClientSession</code> over actual stdio JSON-RPC (handshake, tool listing,
+      tool calls, resource read) — not just calling the server object's methods directly.</div>
     </div>
     <div class="file">
       <div class="path">__init__.py <span class="dim">(×2, empty)</span></div>
@@ -1288,8 +1312,87 @@
     </figcaption>
   </figure>
 
-  <footer>labgo · Change Impact Analyst · Stages 1–3b done (AST graph + git ground truth +
-  interactive viewer · Neo4j deterministic baseline, 22.4% recall · Voyage vector index over
-  1,229 nodes · hybrid retrieval, 40.1% recall / 14.8% precision, D015) — Stage 4, a
-  LangGraph multi-agent workflow, is next.</footer>
+  <h2>Data flow — Stage 4 &amp; 5: two callers, one implementation</h2>
+  <figure>
+    <div class="diagram-scroll">
+      <svg class="dfd" viewBox="0 0 900 420" role="img"
+           aria-label="Diagram showing agent.py's five tool functions as a shared implementation queried from below by Neo4j and the corpus repo's git log, and called from two directions above: the Stage 4 LangGraph loop, which drives the tools itself and calls the Anthropic API to decide which ones to use, and the Stage 5 MCP server, which exposes the same tools over stdio for any external MCP client's own model to call instead. Opposite direction of control, same underlying functions.">
+        <!-- shared tools box, center -->
+        <rect x="340" y="150" width="220" height="150" rx="7" class="box box-source"></rect>
+        <text x="354" y="176" font-size="12.5" font-weight="700">agent.py — tool_*()</text>
+        <text x="354" y="193" font-size="10" class="sub">tool_call_graph</text>
+        <text x="354" y="207" font-size="10" class="sub">tool_co_change</text>
+        <text x="354" y="221" font-size="10" class="sub">tool_semantic_search</text>
+        <text x="354" y="235" font-size="10" class="sub">tool_test_coverage</text>
+        <text x="354" y="249" font-size="10" class="sub">tool_likely_reviewer</text>
+        <text x="354" y="266" font-size="9.5" class="sub">— promoted off _tool_* names</text>
+        <text x="354" y="279" font-size="9.5" class="sub">&#160;&#160;specifically for this reuse</text>
+
+        <!-- Stage 4: LangGraph loop, left -->
+        <rect x="30" y="30" width="240" height="90" rx="7" class="box"></rect>
+        <text x="44" y="56" font-size="12.5" font-weight="700">agent.py — LangGraph loop</text>
+        <text x="44" y="73" font-size="10" class="sub">cli.agent() / cli.agent-eval()</text>
+        <text x="44" y="88" font-size="10" class="sub">agent ⇄ tools, drives the tools itself</text>
+        <text x="44" y="103" font-size="10" class="sub">30.3% recall, doesn't beat floor (D016)</text>
+
+        <rect x="30" y="160" width="240" height="60" rx="7" class="box box-source"></rect>
+        <text x="44" y="185" font-size="12.5" font-weight="700">Anthropic API</text>
+        <text x="44" y="202" font-size="10" class="sub">Haiku 4.5 — decides which tool to call</text>
+
+        <polyline points="150,120 150,160" class="edge edge-accent" marker-end="url(#arrow)"></polyline>
+        <text x="160" y="145" font-size="9.5" class="cli-label">messages.create()</text>
+        <polyline points="270,90 340,190" class="edge" marker-end="url(#arrow)"></polyline>
+        <text x="278" y="130" font-size="9.5" class="cli-label">calls, in-process</text>
+
+        <!-- Stage 5: MCP server, right -->
+        <rect x="630" y="30" width="240" height="90" rx="7" class="box"></rect>
+        <text x="644" y="56" font-size="12.5" font-weight="700">mcp_server.py — MCPServer</text>
+        <text x="644" y="73" font-size="10" class="sub">cli.mcp() — build_server(), run(stdio)</text>
+        <text x="644" y="88" font-size="10" class="sub">owns no logic — @server.tool() wiring</text>
+        <text x="644" y="103" font-size="10" class="sub">+ labgo://files resource</text>
+
+        <rect x="630" y="160" width="240" height="60" rx="7" class="box box-source"></rect>
+        <text x="644" y="185" font-size="12.5" font-weight="700">any MCP client</text>
+        <text x="644" y="202" font-size="10" class="sub">Claude Code, Claude Desktop, ...</text>
+
+        <polyline points="750,120 750,160" class="edge edge-accent" marker-end="url(#arrow)"
+                   marker-start="url(#arrow)"></polyline>
+        <text x="760" y="145" font-size="9.5" class="cli-label">stdio JSON-RPC</text>
+        <polyline points="630,90 560,190" class="edge" marker-end="url(#arrow)"></polyline>
+        <text x="592" y="130" font-size="9.5" class="cli-label">calls, in-process</text>
+
+        <!-- shared data sources, below -->
+        <rect x="330" y="330" width="150" height="60" rx="7" class="box box-source"></rect>
+        <text x="344" y="355" font-size="12.5" font-weight="700">Neo4j AuraDB</text>
+        <text x="344" y="372" font-size="10" class="sub">Cypher — calls/cochange/vectors/tests</text>
+        <polyline points="405,330 405,300" class="edge edge-accent" marker-end="url(#arrow)"
+                   marker-start="url(#arrow)"></polyline>
+
+        <rect x="500" y="330" width="150" height="60" rx="7" class="box box-source"></rect>
+        <text x="514" y="355" font-size="12.5" font-weight="700">corpus repo</text>
+        <text x="514" y="372" font-size="10" class="sub">git log — likely_reviewer only</text>
+        <polyline points="530,330 495,300" class="edge" marker-end="url(#arrow)"
+                   marker-start="url(#arrow)"></polyline>
+      </svg>
+    </div>
+    <figcaption>
+      The same five functions, two opposite directions of control. <b>Stage 4</b> (left):
+      this project drives the tools itself — a LangGraph loop calls the Anthropic API to
+      decide which tool to use, measured at 30.3% recall, not yet beating the deterministic
+      floor (D016). <b>Stage 5</b> (right): this project's tools are handed to <em>any</em>
+      MCP client's own model to call instead — verified against a real
+      <code>mcp.ClientSession</code> over stdio, not just direct function calls. Both call
+      the identical <code>tool_*()</code> functions in <code>agent.py</code> — promoted off
+      their original <code>_tool_*</code> private names specifically so a second caller
+      could reuse them without a copy drifting out of sync. Four of the five tools query
+      Neo4j; only <code>likely_reviewer</code> reads the corpus repo directly, via plain
+      <code>git log</code>, no graph involved.
+    </figcaption>
+  </figure>
+
+  <footer>labgo · Change Impact Analyst · Stages 1–5 done (AST graph + git ground truth ·
+  Neo4j deterministic baseline, 22.4% recall floor, 43.3% recall / 15.4% precision matched-
+  budget hybrid+cochange, D010/D012/D015 · LangGraph agent measured at 30.3% recall, doesn't
+  beat the baseline yet, D016 · MCP server verified with a real client) — Stage 6,
+  observability + CI eval, is next.</footer>
 </div>
