@@ -111,6 +111,8 @@ does no graph traversal.
 ```bash
 uv run labgo baseline benchmarks/httpx --method vectors --k 4    # vector-only, matched budget
 uv run labgo baseline benchmarks/httpx --method hybrid --hops 2 --no-cochange --k 4
+uv run labgo baseline benchmarks/httpx --method hybrid --hops 2 \
+  --cochange --min-count 25 --k 4                                # + cochange, D015 follow-up
 ```
 
 D001's claim ("vector search cannot answer transitive impact") checked with a number, not
@@ -125,6 +127,14 @@ each contribute their own top-k neighbors unfiltered, sweeping in ~30% of the en
 60-file corpus per case on average. Fixed to rank by best-matching file and cap at `k`
 files total, same shape as `hops` bounding the call-graph baseline. Full sweep and the
 fair-comparison reasoning are in D015.
+
+**Follow-up, once D012/D010 made scoring `CO_CHANGED` honest:** adding it to the hybrid
+(`--cochange --min-count 25`) lifts recall to **43.3% / 15.4% precision** — real, modest
+additional signal (+3.2 recall points), not leakage, though the effect shrinks as `k`
+grows since a wide vector net starts catching the same hits on its own. Ranking/weighting
+the union (vs. the current plain set union) stays deliberately unbuilt — no measurement
+yet shows the naive union is the bottleneck, the same "don't build it until proven
+necessary" call D004 made about type inference.
 
 ## Impact viewer
 
@@ -164,6 +174,7 @@ Baseline    22.4% mean recall · 28.8% hit rate (call-graph only, 236-case bench
             15.7% precision — beats the floor on both axes (D010)
 Vectors     1,229 Function/Class nodes embedded (voyage-code-3) · 162,884 tokens billed
 Retrieval   calls 22.4% · vectors 19.3% (matched ~4-file budget) · hybrid 40.1% (D015)
+            hybrid + cochange (min_count=25): 43.3% recall · 15.4% precision (D015 follow-up)
 ```
 
 The 27.2% is deliberately reported rather than massaged. The residual is diagnosed —

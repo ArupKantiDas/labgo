@@ -279,17 +279,17 @@
 
   <figure>
     <div class="diagram-scroll">
-      <svg class="dfd" viewBox="0 0 640 354" role="img"
-           aria-label="Bar chart comparing recall and precision across three impact-prediction methods at a matched prediction budget of about four files per case. Call-graph only scores 22.4% recall and 12.2% precision. Vectors alone at k=4 score 19.3% recall and 13.2% precision. The hybrid union of both scores 40.1% recall and 14.8% precision, highest on both measures.">
-        <!-- highlight band behind the hybrid group, drawn first so gridlines sit on top -->
-        <rect x="481.7" y="64" width="90" height="230" rx="6" class="highlight-band" fill-opacity="0.6"></rect>
+      <svg class="dfd" viewBox="0 0 800 354" role="img"
+           aria-label="Bar chart comparing recall and precision across four impact-prediction methods at a matched prediction budget of about four to five files per case. Call-graph only scores 22.4% recall and 12.2% precision. Vectors alone at k=4 score 19.3% recall and 13.2% precision. The hybrid union of calls and vectors scores 40.1% recall and 14.8% precision. Adding co-change, mined leave-one-out at min_count 25, scores highest on both measures: 43.3% recall and 15.4% precision.">
+        <!-- highlight band behind the best (hybrid+cochange) group, drawn first so gridlines sit on top -->
+        <rect x="668.4" y="64" width="90" height="230" rx="6" class="highlight-band" fill-opacity="0.6"></rect>
 
         <!-- gridlines -->
-        <line x1="60" y1="294" x2="620" y2="294" class="grid"></line>
-        <line x1="60" y1="236.5" x2="620" y2="236.5" class="grid"></line>
-        <line x1="60" y1="179" x2="620" y2="179" class="grid"></line>
-        <line x1="60" y1="121.5" x2="620" y2="121.5" class="grid"></line>
-        <line x1="60" y1="64" x2="620" y2="64" class="grid"></line>
+        <line x1="60" y1="294" x2="770" y2="294" class="grid"></line>
+        <line x1="60" y1="236.5" x2="770" y2="236.5" class="grid"></line>
+        <line x1="60" y1="179" x2="770" y2="179" class="grid"></line>
+        <line x1="60" y1="121.5" x2="770" y2="121.5" class="grid"></line>
+        <line x1="60" y1="64" x2="770" y2="64" class="grid"></line>
         <text x="52" y="297" text-anchor="end" font-size="10" class="sub">0%</text>
         <text x="52" y="239.5" text-anchor="end" font-size="10" class="sub">25%</text>
         <text x="52" y="182" text-anchor="end" font-size="10" class="sub">50%</text>
@@ -332,19 +332,33 @@
         <text x="547.7" y="254.0" text-anchor="middle" font-size="11" font-weight="700">14.8%</text>
         <text x="526.7" y="312" text-anchor="middle" font-size="12" font-weight="600">hybrid</text>
         <text x="526.7" y="325" text-anchor="middle" font-size="9.5" class="sub">hops=2, k=4</text>
+
+        <!-- hybrid + cochange (loo, min_count=25), D015 follow-up: recall 43.3%, precision 15.4% -->
+        <rect x="680.4" y="194.4" width="24" height="99.6" rx="4" class="bar-recall"></rect>
+        <rect x="680.4" y="290" width="24" height="4" class="bar-recall"></rect>
+        <text x="692.4" y="188.4" text-anchor="middle" font-size="11" font-weight="700">43.3%</text>
+        <rect x="722.4" y="258.6" width="24" height="35.4" rx="4" class="bar-precision"></rect>
+        <rect x="722.4" y="290" width="24" height="4" class="bar-precision"></rect>
+        <text x="734.4" y="252.6" text-anchor="middle" font-size="11" font-weight="700">15.4%</text>
+        <text x="713.4" y="312" text-anchor="middle" font-size="12" font-weight="600">hybrid+cc</text>
+        <text x="713.4" y="325" text-anchor="middle" font-size="9.5" class="sub">k=4, min_count=25</text>
       </svg>
     </div>
     <figcaption>
-      Recall and precision for three impact-prediction methods, at a prediction budget
-      matched across all three (~4 files/case) — the fair comparison, not the highest-<code>k</code>
+      Recall and precision for four impact-prediction methods, at a prediction budget
+      matched across all four (~4–5 files/case) — the fair comparison, not the highest-<code>k</code>
       one (D015's full sweep reaches 60.7% recall at <code>k=20</code>, but only by spending
       precision down to 7% — predicting a much larger slice of the corpus). At matched
       budget, vectors alone (19.3% recall) don't beat call-graph alone (22.4%) — D001's claim
       that vector search can't answer transitive impact holds under measurement, not just
-      assertion. The <b>hybrid</b> union of both (highlighted), no weighting or ranking, reaches
-      40.1% recall and 14.8% precision — ahead of either signal alone on <em>both</em> axes,
-      meaning the two retrieval modes catch different true positives more often than they
-      overlap.
+      assertion. The <b>hybrid</b> union of both reaches 40.1% recall and 14.8% precision —
+      ahead of either signal alone on <em>both</em> axes, meaning the two retrieval modes
+      catch different true positives more often than they overlap. <b>hybrid+cc</b>
+      (highlighted) adds co-change, mined leave-one-out at a matched <code>min_count=25</code>
+      (D012, D010) — real additional lift (43.3% / 15.4%), not leakage, though a small one
+      that shrinks as <code>k</code> grows (D015 follow-up). The union stays a plain set
+      union throughout — no weighting or ranking; deliberately deferred until a measurement
+      shows it's the bottleneck, not assumed.
     </figcaption>
   </figure>
 
@@ -645,7 +659,12 @@
       (D012: <code>use_cochange=True</code> here needs <code>pairs=</code> too, same
       leave-one-out requirement as <code>baseline.score_baseline</code>) and nothing from
       <code>embed.py</code>, so it has no <code>voyageai</code> dependency: scoring reuses
-      vectors <code>labgo embed</code> already wrote, no live Voyage call needed to rerun it.</div>
+      vectors <code>labgo embed</code> already wrote, no live Voyage call needed to rerun it.
+      D015 follow-up: turning cochange back on with D010's matched <code>min_count=25</code>
+      lifts the hybrid to <b>43.3% recall / 15.4% precision</b> — real lift, not the
+      leakage D012 caught, though it shrinks as <code>k</code> grows since a wide vector
+      net starts catching the same hits on its own. Ranking the union stays unbuilt on
+      purpose — no measurement yet shows the plain union is the bottleneck.</div>
     </div>
     <div class="file">
       <div class="path">__init__.py <span class="dim">(×2, empty)</span></div>

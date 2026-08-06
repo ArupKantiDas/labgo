@@ -581,6 +581,34 @@ counts the same as one predicted by either alone. `k` is not tuned past this swe
 `CO_CHANGED` (excluded here per D012) adds further honest lift on top of the hybrid, versus
 just reintroducing leakage, is untested.
 
+**Follow-up (2026-08-06), after D012 and D010 made it safe to ask.** With leave-one-out
+mining and a matched `min_count=25`, the "is it just leakage" question has an answer:
+`predict_impact_hybrid(use_cochange=True, pairs=..., min_count=25)` already implements
+this (D012's change to `hybrid.py`) — no new code needed, only the measurement.
+
+| method (hops=2, k=4) | recall | precision | mean size |
+|---|---|---|---|
+| calls + vectors (D015's original hybrid) | 40.1% | 14.8% | 8.1 |
+| calls + vectors + cochange (loo, min_count=25) | **43.3%** | **15.4%** | 8.3 |
+
+Real, modest, honestly-measured lift — +3.2 recall points for +0.2 files/case, precision
+*improving* slightly rather than being spent down. At `k=3` the same pattern holds
+(38.6%/15.2% → 41.8%/15.9%); by `k=6` the two numbers converge exactly (47.1%/14.2% for
+both) — cochange's marginal contribution at `min_count=25` is small enough (~0.3
+files/case, D010) that a wide-enough vector net catches the same handful of hits on its
+own. **Conclusion: CO_CHANGED adds real signal on top of the hybrid, not leakage — but
+the effect is small and shrinks as `k` grows**, consistent with D010's finding that
+`min_count=25`'s co-change contribution is inherently thin.
+
+**Ranked/weighted union — deferred, not built, and for a reason worth stating rather than
+just leaving silent.** The naive union already produces a smooth, sensible recall/precision
+curve across every sweep run so far (D015's original, this one, D010's). Building a scorer
+(e.g. rank by how many of the three signals agree, break ties by vector cosine) is real
+engineering with no evidence yet that it's needed — the same posture D004 already took on
+type inference: **do not adopt it until a measurement shows the naive union is the binding
+constraint**. It may not be; the bottleneck visible in every number so far is retrieval
+*recall* at any reasonable budget (the 22.4–43.3% range), not the union's ranking.
+
 ---
 
 ## Template
