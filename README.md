@@ -1,7 +1,15 @@
 # LabGo — Change Impact Analyst
 
+![I built LabGo to learn GraphRAG. Writing it down is what made it stick.](docs/labgo-social-card.png)
+
 Ask a codebase: **"if I change this, what breaks, which tests must run, and who should
 review it?"**
+
+I built LabGo while learning GraphRAG. The code gave me working parts; explaining every
+file and rereading the decisions was what made the ideas stick. The longer story is on
+[arupdas.com](https://arupdas.com/work/labgo), and the short field guide is a
+[free PDF](https://arupdas.com/books/the-impact-map). If you prefer to start with the
+repository itself, open the interactive [file map](https://arupdas.com/labgo/file-map.html).
 
 A knowledge graph of a real repository (files, functions, call edges, imports, test
 coverage, git co-change, ownership) plus semantic search over function/class source code,
